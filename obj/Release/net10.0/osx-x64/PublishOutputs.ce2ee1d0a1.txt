@@ -1,0 +1,3 @@
+/Users/Movies/Bulletbox/dist/Bulletbox.pdb
+/Users/Movies/Bulletbox/dist/libraylib.dylib
+/Users/Movies/Bulletbox/dist/Bulletbox
