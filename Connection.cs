@@ -112,6 +112,13 @@ public class Connection
                         Program.PlayingState.MaxHealth = maxHealth;
                     }
                 }
+                else if (packetId == 7) // Knockback Force
+                {
+                    float forceX = _reader.ReadSingle();
+                    float forceY = _reader.ReadSingle();
+                    if (Program.PlayingState != null)
+                        Program.PlayingState.ApplyKnockback(new Vector2(forceX, forceY));
+                }
             }
         }
         catch (EndOfStreamException)

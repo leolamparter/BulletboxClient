@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "/Users/Movies/Bulletbox/Bulletbox.csproj": {}
+    "/Users/Movies/Bulletbox/BulletboxClient/Bulletbox.csproj": {}
   },
   "projects": {
-    "/Users/Movies/Bulletbox/Bulletbox.csproj": {
+    "/Users/Movies/Bulletbox/BulletboxClient/Bulletbox.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/Users/Movies/Bulletbox/Bulletbox.csproj",
+        "projectUniqueName": "/Users/Movies/Bulletbox/BulletboxClient/Bulletbox.csproj",
         "projectName": "Bulletbox",
-        "projectPath": "/Users/Movies/Bulletbox/Bulletbox.csproj",
+        "projectPath": "/Users/Movies/Bulletbox/BulletboxClient/Bulletbox.csproj",
         "packagesPath": "/Users/Movies/.nuget/packages/",
-        "outputPath": "/Users/Movies/Bulletbox/obj/",
+        "outputPath": "/Users/Movies/Bulletbox/BulletboxClient/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "/Users/Movies/.nuget/NuGet/NuGet.Config"

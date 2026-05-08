@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "lNLdgPLtXf8=",
+  "dgSpecHash": "YaiQV8yPRZ4=",
   "success": true,
-  "projectFilePath": "/Users/Movies/Bulletbox/Bulletbox.csproj",
+  "projectFilePath": "/Users/Movies/Bulletbox/BulletboxClient/Bulletbox.csproj",
   "expectedPackageFiles": [
     "/Users/Movies/.nuget/packages/raylib-cs/7.0.2/raylib-cs.7.0.2.nupkg.sha512"
   ],
