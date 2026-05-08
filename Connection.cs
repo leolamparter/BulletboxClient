@@ -168,6 +168,18 @@ public class Connection
         } catch { _isConnected = false; }
     }
 
+    public void SendAttack(string targetName)
+    {
+        if (!_isConnected || _writer == null) return;
+        try
+        {
+            _writer.Write((byte)6); // Packet ID 6
+            _writer.Write(targetName);
+            _writer.Flush();
+        }
+        catch { _isConnected = false; }
+    }
+
     public bool IsConnected() => _isConnected;
 
     public void Disconnect()
