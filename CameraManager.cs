@@ -1,10 +1,11 @@
 using Raylib_cs;
 using System.Numerics;
+using System;
 
 public class CameraManager
 {
     public Camera2D RaylibCamera;
-    public float LerpFactor = 0.12f; // Adjust this for "laziness" (0.1 is slower, 0.5 is snappier)
+    public float LerpSpeed = 25.0f; // Increased for much tighter centering
 
     public float Zoom
     {
@@ -21,14 +22,14 @@ public class CameraManager
         RaylibCamera.Zoom = 1.0f;
     }
 
-    public void Update(Vector2 playerPos)
+    public void Update(Vector2 playerPos, float dt)
     {
         // Calculate the center of the player (64x64 size)
         Vector2 playerCenter = new Vector2(playerPos.X + 32, playerPos.Y + 32);
 
-        // Smoothly move the camera target towards the player center
-        RaylibCamera.Target.X += (playerCenter.X - RaylibCamera.Target.X) * LerpFactor;
-        RaylibCamera.Target.Y += (playerCenter.Y - RaylibCamera.Target.Y) * LerpFactor;
+        // Frame-rate independent Lerp for perfectly smooth tracking
+        RaylibCamera.Target.X += (playerCenter.X - RaylibCamera.Target.X) * (1.0f - (float)Math.Exp(-LerpSpeed * dt));
+        RaylibCamera.Target.Y += (playerCenter.Y - RaylibCamera.Target.Y) * (1.0f - (float)Math.Exp(-LerpSpeed * dt));
 
         // Keep the offset updated in case the window is resized
         RaylibCamera.Offset = new Vector2(Raylib.GetScreenWidth() / 2, Raylib.GetScreenHeight() / 2);

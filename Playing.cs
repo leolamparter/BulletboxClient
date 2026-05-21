@@ -22,8 +22,6 @@ public class Playing
     private int _selectedHotbarIndex = 0;
     private Vector2 _kbVelocity = Vector2.Zero;
     
-    private Texture2D _playerIdleTexture;
-    private Texture2D _enemyIdleTexture; // Assuming enemies use the same animation for now
 
     public Playing(string myName)
     {
@@ -39,20 +37,10 @@ public class Playing
     public void LoadAssets()
     {
         // Load player and enemy idle textures
-        AssetManager.LoadTexture("player_idle", "./resources/textures/entity/player/idle.png");
-        AssetManager.LoadTexture("enemy_idle", "./resources/textures/entity/player/idle.png");
-
         // Load Hotbar UI Textures
         AssetManager.LoadTexture("hotbar_active", "resources/textures/ui/inventory/hotbar_active.png");
         AssetManager.LoadTexture("hotbar_deactive", "resources/textures/ui/inventory/hotbar_deactive.png");
 
-        // Retrieve loaded textures
-        _playerIdleTexture = AssetManager.GetTexture("player_idle");
-        _enemyIdleTexture = AssetManager.GetTexture("enemy_idle");
-
-        // Diagnostic: Check if textures loaded successfully
-        if (_playerIdleTexture.Id == 0) Console.WriteLine("ERROR: 'player_idle' texture failed to load! Please ensure 'resources/textures/entity/player/idle.png' exists and is copied to the output directory.");
-        if (_enemyIdleTexture.Id == 0) Console.WriteLine("ERROR: 'enemy_idle' texture failed to load! Please ensure 'resources/textures/entity/player/idle.png' exists and is copied to the output directory.");
         if (AssetManager.GetTexture("hotbar_active").Id == 0) Console.WriteLine("ERROR: 'hotbar_active' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_active.png");
         if (AssetManager.GetTexture("hotbar_deactive").Id == 0) Console.WriteLine("ERROR: 'hotbar_deactive' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_deactive.png");
     }
@@ -99,8 +87,8 @@ public class Playing
         }
         HandleCombat();
 
-        // KEEPING YOUR ORIGINAL CAMERA LERP
-        Cam.Update(LocalPlayer.Position);
+        // Update camera AFTER all movement (including knockback) to prevent jitter
+        Cam.Update(LocalPlayer.Position, dt);
         
         // Apply FOV setting from Options
         Cam.Zoom = Settings.FOV; // Assuming CameraManager now has a public 'Zoom' property
@@ -171,11 +159,11 @@ public class Playing
 
         Cam.Begin();
             foreach (var other in Others.Values) 
-            {
-                other.Draw(_enemyIdleTexture); // Pass the animation texture to other players
+            {   
+                other.Draw(); // Draw other players
                 Debug.DrawHitbox(other.Position);
             }
-            LocalPlayer.Draw(_playerIdleTexture); // Pass the animation texture to the local player
+            LocalPlayer.Draw(); // Draw the local player
             Debug.DrawHitbox(LocalPlayer.Position);
         Cam.End();
 

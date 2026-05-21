@@ -36,7 +36,7 @@ public class PauseMenu
 
     public void Draw()
     {
-        Program.PlayingState.Update();
+        Program.PlayingState?.Update();
         Raylib.DrawRectangle(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(0, 0, 0, 150));
         Raylib.DrawText("PAUSED", (int)(Raylib.GetScreenWidth()/2 - 70), (int)(Raylib.GetScreenHeight()/2 - 120), 40, Color.Yellow);
         foreach (var btn in buttons) btn.Draw();

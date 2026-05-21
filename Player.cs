@@ -12,54 +12,83 @@ public class Player
     public int MaxHealth = 100;
     public bool FacingRight = true;
 
-    private int _animationFrame = 0;
-    private float _frameTimer = 0f;
-    private const float _frameDuration = 1.0f / 4.0f; // 4 FPS for a 2-frame animation
+    private float _rotation = 0f;
+    private const float _rotationSpeed = 150f; // Degrees per second
+
+    // Pixelation Filter Buffer
+    private RenderTexture2D _pixelTarget;    // Per-instance for unique rotations
+    private RenderTexture2D _shapeTemplate;  
+    private bool _initialized = false;
 
     public Player(string name, Vector2 startPos)
     {
         Name = name;
         Position = startPos;
         Color = Color.White; // Other players are white
+        // Local player is blue, set in Playing.cs constructor
     }
 
     public void Update(float dt)
     {
-        _frameTimer += dt;
-        if (_frameTimer >= _frameDuration)
+        _rotation += _rotationSpeed * dt;
+        if (_rotation >= 360f) _rotation -= 360f;
+        if (_rotation < 0f) _rotation += 360f;
+
+        // Initialize and Update the pixelated texture OUTSIDE of the Camera Mode
+        // This prevents the camera matrix from being discarded during the draw call.
+        if (!_initialized)
         {
-            _animationFrame = (_animationFrame + 1) % 2; // Cycle between frame 0 and 1
-            _frameTimer -= _frameDuration; // Subtract, don't reset, to maintain animation accuracy
+            _pixelTarget = Raylib.LoadRenderTexture(24, 24);
+            Raylib.SetTextureFilter(_pixelTarget.Texture, TextureFilter.Point);
+
+            _shapeTemplate = Raylib.LoadRenderTexture(64, 64);
+            Raylib.BeginTextureMode(_shapeTemplate);
+                Raylib.ClearBackground(Color.Blank);
+                Raylib.DrawRectangleRounded(new Rectangle(0, 0, 64, 64), 0.25f, 16, Color.White);
+            Raylib.EndTextureMode();
+            Raylib.SetTextureFilter(_shapeTemplate.Texture, TextureFilter.Bilinear);
+            _initialized = true;
         }
+
+        // Render the spinning shapes into the buffer
+        Raylib.BeginTextureMode(_pixelTarget);
+            Raylib.ClearBackground(Color.Blank);
+            float canvasScale = 24f / 96f;
+            Vector2 texCenter = new Vector2(12, 12);
+            Rectangle templateSource = new Rectangle(0, 0, 64, -64);
+
+            // Outer Square (CCW)
+            Rectangle outerDest = new Rectangle(texCenter.X, texCenter.Y, 64 * canvasScale, 64 * canvasScale);
+            Vector2 outerOrigin = new Vector2(32 * canvasScale, 32 * canvasScale);
+            Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, outerDest, outerOrigin, -_rotation, Color.DarkGreen);
+
+            // Inner Square (CW)
+            float innerSize = 64 * 0.55f * canvasScale;
+            Rectangle innerDest = new Rectangle(texCenter.X, texCenter.Y, innerSize, innerSize);
+            Vector2 innerOrigin = new Vector2(innerSize / 2, innerSize / 2);
+            Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, innerDest, innerOrigin, _rotation, Color.Magenta);
+        Raylib.EndTextureMode();
     }
 
-    public void Draw(Texture2D? texture = null)
+    public void Draw()
     {
-        // 1. Draw Player Body
-        if (texture.HasValue && texture.Value.Id != 0)
-        {
-            // Calculate the source rectangle for the current animation frame
-            // To flip the texture, we start the X at the right edge and use a negative width
-            Rectangle sourceRec = new Rectangle(
-                FacingRight ? 0 : 64, 
-                _animationFrame * 64, 
-                FacingRight ? 64 : -64, 
-                64
-            );
-            Raylib.DrawTexturePro(texture.Value, sourceRec, new Rectangle(Position.X, Position.Y, 64, 64), Vector2.Zero, 0f, Color.White);
-        }
-        else
-        {
-            Raylib.DrawRectangleV(Position, new Vector2(64, 64), Color);
-        }
+        // Calculate the center of the player for rotation
+        Vector2 center = new Vector2(Position.X + 32, Position.Y + 32);
+        
+        // Now we just draw the pre-rendered texture. This is world-space safe.
+        Rectangle source = new Rectangle(0, 0, 24, -24);
+        Rectangle dest = new Rectangle(center.X, center.Y, 96, 96);
+        Vector2 destOrigin = new Vector2(48, 48); // Center the 96x96 texture on the player center
+        
+        Raylib.DrawTexturePro(_pixelTarget.Texture, source, dest, destOrigin, 0f, Color.White);
 
-        // 2. Draw Name Tag
+        // 3. Draw Name Tag
         int textWidth = Raylib.MeasureText(Name, 20);
         int xPos = (int)(Position.X + 32 - (textWidth / 2)); 
         int yPos = (int)Position.Y - 30;
         Raylib.DrawText(Name, xPos, yPos, 20, Color.White);
 
-        // 3. Simple Overhead Health Bar (Visual only)
+        // 4. Simple Overhead Health Bar (Visual only)
         float healthBarWidth = 64;
         float healthPercent = (float)Health / MaxHealth;
         
