@@ -10,6 +10,11 @@ public class Player
     // Add health tracking for visual display
     public int Health = 100;
     public int MaxHealth = 100;
+    public bool FacingRight = true;
+
+    private int _animationFrame = 0;
+    private float _frameTimer = 0f;
+    private const float _frameDuration = 1.0f / 4.0f; // 4 FPS for a 2-frame animation
 
     public Player(string name, Vector2 startPos)
     {
@@ -18,10 +23,35 @@ public class Player
         Color = Color.White; // Other players are white
     }
 
-    public void Draw()
+    public void Update(float dt)
+    {
+        _frameTimer += dt;
+        if (_frameTimer >= _frameDuration)
+        {
+            _animationFrame = (_animationFrame + 1) % 2; // Cycle between frame 0 and 1
+            _frameTimer -= _frameDuration; // Subtract, don't reset, to maintain animation accuracy
+        }
+    }
+
+    public void Draw(Texture2D? texture = null)
     {
         // 1. Draw Player Body
-        Raylib.DrawRectangleV(Position, new Vector2(64, 64), Color);
+        if (texture.HasValue && texture.Value.Id != 0)
+        {
+            // Calculate the source rectangle for the current animation frame
+            // To flip the texture, we start the X at the right edge and use a negative width
+            Rectangle sourceRec = new Rectangle(
+                FacingRight ? 0 : 64, 
+                _animationFrame * 64, 
+                FacingRight ? 64 : -64, 
+                64
+            );
+            Raylib.DrawTexturePro(texture.Value, sourceRec, new Rectangle(Position.X, Position.Y, 64, 64), Vector2.Zero, 0f, Color.White);
+        }
+        else
+        {
+            Raylib.DrawRectangleV(Position, new Vector2(64, 64), Color);
+        }
 
         // 2. Draw Name Tag
         int textWidth = Raylib.MeasureText(Name, 20);

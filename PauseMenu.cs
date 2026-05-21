@@ -25,7 +25,10 @@ public class PauseMenu
             if (buttons[i].IsClicked())
             {
                 if (i == 0) Program.IsPaused = false;
-                if (i == 1) Console.WriteLine("Options clicked!");
+                if (i == 1) {
+                    Program.cameFrom = GameState.PLAYING;
+                    Program.CurrentState = GameState.OPTIONS;
+                }
                 if (i == 2) Program.DisconnectAndLeave();
             }
         }
@@ -33,11 +36,9 @@ public class PauseMenu
 
     public void Draw()
     {
-        // Draw a dark semi-transparent overlay over the game
+        Program.PlayingState.Update();
         Raylib.DrawRectangle(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(0, 0, 0, 150));
-        
         Raylib.DrawText("PAUSED", (int)(Raylib.GetScreenWidth()/2 - 70), (int)(Raylib.GetScreenHeight()/2 - 120), 40, Color.Yellow);
-
         foreach (var btn in buttons) btn.Draw();
     }
 }

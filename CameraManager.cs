@@ -6,6 +6,12 @@ public class CameraManager
     public Camera2D RaylibCamera;
     public float LerpFactor = 0.12f; // Adjust this for "laziness" (0.1 is slower, 0.5 is snappier)
 
+    public float Zoom
+    {
+        get => RaylibCamera.Zoom;
+        set => RaylibCamera.Zoom = value;
+    }
+
     public CameraManager(Vector2 startTarget)
     {
         RaylibCamera = new Camera2D();

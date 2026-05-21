@@ -1,8 +1,9 @@
-﻿using Raylib_cs;
+﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
+using BulletboxClient;
 
-public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING }
+public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS }
 
 class Program
 {
@@ -15,6 +16,7 @@ class Program
     // NEW: Pause State
     public static bool IsPaused = false;
     public static PauseMenu? pauseMenu;
+    public static GameState cameFrom = GameState.HOME;
 
     static void Main()
     {
@@ -30,6 +32,7 @@ class Program
         HomeScreen homeScreen = new HomeScreen();
         LoginScreen loginScreen = new LoginScreen();
         pauseMenu = new PauseMenu(); // Initialize the menu
+        OptionsScreen optionsScreen = new OptionsScreen();
 
         while (!Raylib.WindowShouldClose())
         {
@@ -63,6 +66,9 @@ class Program
                         }
                         PlayingState.Update();
                         break;
+                    case GameState.OPTIONS:
+                        optionsScreen.Update();
+                        break;
                 }
             }
 
@@ -82,9 +88,11 @@ class Program
                     break;
                 case GameState.PLAYING:
                     PlayingState?.Draw();
-                    
-                    // Draw Pause Menu on top if active
                     if (IsPaused) pauseMenu.Draw(); 
+                    break;
+                case GameState.OPTIONS:
+                    if (cameFrom == GameState.PLAYING) PlayingState?.Draw();
+                    optionsScreen.Draw();
                     break;
             }
             Raylib.EndDrawing();

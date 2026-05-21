@@ -2,6 +2,7 @@ using Raylib_cs;
 using System.Numerics;
 using System.Collections.Generic;
 using System; // For Console
+using BulletboxClient; // Added to access Settings and OptionsScreen
 
 public class Playing
 {
@@ -20,6 +21,9 @@ public class Playing
     private float _cHitTimer = 10f;   
     private int _selectedHotbarIndex = 0;
     private Vector2 _kbVelocity = Vector2.Zero;
+    
+    private Texture2D _playerIdleTexture;
+    private Texture2D _enemyIdleTexture; // Assuming enemies use the same animation for now
 
     public Playing(string myName)
     {
@@ -28,6 +32,29 @@ public class Playing
         Cam = new CameraManager(LocalPlayer.Position);
         Hotbar = new HotbarUI(PlayerInventory);
         InvMenu = new InventoryUI(PlayerInventory);
+
+        LoadAssets();
+    }
+
+    public void LoadAssets()
+    {
+        // Load player and enemy idle textures
+        AssetManager.LoadTexture("player_idle", "./resources/textures/entity/player/idle.png");
+        AssetManager.LoadTexture("enemy_idle", "./resources/textures/entity/player/idle.png");
+
+        // Load Hotbar UI Textures
+        AssetManager.LoadTexture("hotbar_active", "resources/textures/ui/inventory/hotbar_active.png");
+        AssetManager.LoadTexture("hotbar_deactive", "resources/textures/ui/inventory/hotbar_deactive.png");
+
+        // Retrieve loaded textures
+        _playerIdleTexture = AssetManager.GetTexture("player_idle");
+        _enemyIdleTexture = AssetManager.GetTexture("enemy_idle");
+
+        // Diagnostic: Check if textures loaded successfully
+        if (_playerIdleTexture.Id == 0) Console.WriteLine("ERROR: 'player_idle' texture failed to load! Please ensure 'resources/textures/entity/player/idle.png' exists and is copied to the output directory.");
+        if (_enemyIdleTexture.Id == 0) Console.WriteLine("ERROR: 'enemy_idle' texture failed to load! Please ensure 'resources/textures/entity/player/idle.png' exists and is copied to the output directory.");
+        if (AssetManager.GetTexture("hotbar_active").Id == 0) Console.WriteLine("ERROR: 'hotbar_active' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_active.png");
+        if (AssetManager.GetTexture("hotbar_deactive").Id == 0) Console.WriteLine("ERROR: 'hotbar_deactive' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_deactive.png");
     }
 
     public void ApplyKnockback(Vector2 force)
@@ -42,6 +69,9 @@ public class Playing
         // Update Timers every frame
         _cAttackTimer += dt;
         _cHitTimer += dt;
+
+        // Handle Debug inputs
+        Debug.Update();
 
         // Handle Hotbar Selection (Keys 1-6)
         for (int i = 0; i < 6; i++)
@@ -61,10 +91,19 @@ public class Playing
         LocalPlayer.Position += _kbVelocity * dt;
         _kbVelocity = Vector2.Lerp(_kbVelocity, Vector2.Zero, dt * 6.5f); // Smooth friction
 
+        // Update player animations
+        LocalPlayer.Update(dt);
+        foreach (var other in Others.Values)
+        {
+            other.Update(dt);
+        }
         HandleCombat();
 
         // KEEPING YOUR ORIGINAL CAMERA LERP
         Cam.Update(LocalPlayer.Position);
+        
+        // Apply FOV setting from Options
+        Cam.Zoom = Settings.FOV; // Assuming CameraManager now has a public 'Zoom' property
 
         // Network Sync
         if (LocalPlayer.Position != lastPos)
@@ -81,8 +120,16 @@ public class Playing
         float speed = 350f;
         if (Raylib.IsKeyDown(KeyboardKey.W)) LocalPlayer.Position.Y -= speed * dt;
         if (Raylib.IsKeyDown(KeyboardKey.S)) LocalPlayer.Position.Y += speed * dt;
-        if (Raylib.IsKeyDown(KeyboardKey.A)) LocalPlayer.Position.X -= speed * dt;
-        if (Raylib.IsKeyDown(KeyboardKey.D)) LocalPlayer.Position.X += speed * dt;
+        if (Raylib.IsKeyDown(KeyboardKey.A)) 
+        {
+            LocalPlayer.Position.X -= speed * dt;
+            LocalPlayer.FacingRight = false;
+        }
+        if (Raylib.IsKeyDown(KeyboardKey.D)) 
+        {
+            LocalPlayer.Position.X += speed * dt;
+            LocalPlayer.FacingRight = true;
+        }
     }
 
     private void HandleCombat()
@@ -123,8 +170,13 @@ public class Playing
         Raylib.DrawRectangle(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(0, 0, 0, 100));
 
         Cam.Begin();
-            foreach (var other in Others.Values) other.Draw();
-            LocalPlayer.Draw();
+            foreach (var other in Others.Values) 
+            {
+                other.Draw(_enemyIdleTexture); // Pass the animation texture to other players
+                Debug.DrawHitbox(other.Position);
+            }
+            LocalPlayer.Draw(_playerIdleTexture); // Pass the animation texture to the local player
+            Debug.DrawHitbox(LocalPlayer.Position);
         Cam.End();
 
         Hotbar.Draw();

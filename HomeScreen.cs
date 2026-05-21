@@ -40,7 +40,10 @@ public class HomeScreen
                         Program.CurrentState = GameState.LOGIN;
                 }
                 if (i == 1) Console.WriteLine("Mods!");
-                if (i == 2) Console.WriteLine("Options!");
+                if (i == 2) {
+                    Program.cameFrom = GameState.HOME;
+                    Program.CurrentState = GameState.OPTIONS;
+                }
                 if (i == 3) Environment.Exit(0);
             }
         }

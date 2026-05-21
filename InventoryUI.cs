@@ -29,10 +29,10 @@ public class InventoryUI {
         if (!Visible) return;
         int sw = Raylib.GetScreenWidth();
         int sh = Raylib.GetScreenHeight();
-        float size = 60, pad = 10;
-        float startX = (sw - (size + pad) * 6) / 2;
-        float startY = sh / 2 - 100;
-        float hotY = sh - size - 20;
+        float size = 64, pad = 0; // Match Hotbar size (64x64)
+        float startX = (float)Math.Floor((sw - (size + pad) * 6) / 2f);
+        float startY = (float)Math.Floor(sh / 2f - 100f);
+        float hotY = (float)Math.Floor(sh - size - 20f);
 
         Raylib.DrawRectangle(0, 0, sw, sh, new Color(0, 0, 0, 150));
         Raylib.DrawText("INVENTORY (E to close)", (int)startX, (int)startY - 40, 20, Color.Yellow);
@@ -60,10 +60,22 @@ public class InventoryUI {
         Rectangle rect = new Rectangle(x, y, size, size);
         bool isHovered = Raylib.CheckCollisionPointRec(Raylib.GetMousePosition(), rect);
         
-        // HOVER COLOR: Brighter if mouse is over it
-        Color baseCol = isHovered ? new Color(90, 90, 90, 255) : new Color(50, 50, 50, 255);
-        Raylib.DrawRectangleRec(rect, baseCol);
-        Raylib.DrawRectangleLinesEx(rect, 1, Color.Gray);
+        bool isSelected = (index < 6 && Program.PlayingState != null && index == Program.PlayingState.Hotbar.SelectedSlot);
+
+        if (isSelected || isHovered) {
+            Texture2D activeTex = AssetManager.GetTexture("hotbar_active");
+            if (activeTex.Id != 0) {
+                Raylib.DrawTexturePro(activeTex, new Rectangle(0, 0, activeTex.Width, activeTex.Height), rect, Vector2.Zero, 0f, Color.White);
+            }
+        } else {
+            // Draw the deactive individual slots
+            Texture2D deactiveTex = AssetManager.GetTexture("hotbar_deactive");
+            if (deactiveTex.Id != 0) {
+                Raylib.DrawTexturePro(deactiveTex, new Rectangle(0, 0, deactiveTex.Width, deactiveTex.Height), rect, Vector2.Zero, 0f, Color.White);
+            } else {
+                Raylib.DrawRectangleRec(rect, Color.DarkGray);
+            }
+        }
 
         if (isHovered && Raylib.IsMouseButtonPressed(MouseButton.Left)) {
             if (inv.Slots[index].ItemID != ' ') draggingIndex = index;
@@ -77,10 +89,10 @@ public class InventoryUI {
     private int GetSlotUnderMouse() {
         int sw = Raylib.GetScreenWidth();
         int sh = Raylib.GetScreenHeight();
-        float size = 60, pad = 10;
-        float startX = (sw - (size + pad) * 6) / 2;
-        float startY = sh / 2 - 100;
-        float hotY = sh - size - 20;
+        float size = 64, pad = 0;
+        float startX = (float)Math.Floor((sw - (size + pad) * 6) / 2f);
+        float startY = (float)Math.Floor(sh / 2f - 100f);
+        float hotY = (float)Math.Floor(sh - size - 20f);
         Vector2 mouse = Raylib.GetMousePosition();
 
         for (int i = 0; i < 6; i++) {

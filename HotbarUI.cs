@@ -22,18 +22,21 @@ public class HotbarUI {
     public void Draw() {
         int sw = Raylib.GetScreenWidth();
         int sh = Raylib.GetScreenHeight();
-        float size = 60;
-        float pad = 10;
+        float size = 64;
+        float pad = 0;
         float totalW = (size + pad) * 6;
-        float startX = (sw - totalW) / 2;
-        float y = sh - size - 20;
+        float startX = (float)Math.Floor((sw - totalW) / 2f);
+        float y = (float)Math.Floor(sh - size - 20f);
 
         for (int i = 0; i < 6; i++) {
             Rectangle rect = new Rectangle(startX + (i * (size + pad)), y, size, size);
-            
-            // Draw Box
-            Raylib.DrawRectangleRec(rect, new Color(30, 30, 30, 200));
-            Raylib.DrawRectangleLinesEx(rect, i == SelectedSlot ? 3 : 1, i == SelectedSlot ? Color.Yellow : Color.Gray);
+
+            // Draw themed hotbar slot texture
+            string textureKey = i == SelectedSlot ? "hotbar_active" : "hotbar_deactive";
+            Texture2D tex = AssetManager.GetTexture(textureKey);
+            if (tex.Id != 0) {
+                Raylib.DrawTexturePro(tex, new Rectangle(0, 0, tex.Width, tex.Height), rect, Vector2.Zero, 0f, Color.White);
+            }
 
             // Draw Item
             DrawItem(inv.Slots[i], rect);
@@ -44,7 +47,7 @@ public class HotbarUI {
         if (((char)stack.ItemID) != ' ' && ((char)stack.ItemID) != '\0') {
             string id = ((char)stack.ItemID).ToString();
             int tw = Raylib.MeasureText(id, 30);
-            Raylib.DrawText(id, (int)(rect.X + rect.Width/2 - tw/2), (int)(rect.Y + 10), 30, Color.White);
+            Raylib.DrawText(id, (int)(rect.X + rect.Width / 2 - tw / 2), (int)(rect.Y + rect.Height / 2 - 15), 30, Color.White);
             
             if (stack.Count > 1) {
                 Raylib.DrawText(stack.Count.ToString(), (int)rect.X + 5, (int)rect.Y + 40, 15, Color.LightGray);
