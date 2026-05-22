@@ -6,15 +6,6 @@ public class HealthBar
     private float visualHealth = 100f; // For smooth animation
     private float lerpSpeed = 5f;
     
-    private Texture2D heartFullTexture;
-    private Texture2D heartFullFlashTexture;
-    private Texture2D heartEmptyTexture;
-    private Texture2D heartEmptyFlashTexture;
-    private Texture2D heartQuarterTexture;
-    private Texture2D heartQuarterFlashTexture;
-    private Texture2D heartHalfTexture;
-    private Texture2D heartHalfFlashTexture;
-    
     private bool texturesLoaded = false;
 
     private int previousHearts = 10;
@@ -26,32 +17,21 @@ public class HealthBar
     {
         if (!texturesLoaded)
         {
-            heartFullTexture = Raylib.LoadTexture("resources/textures/ui/health_bar/heart_full.png");
-            heartFullFlashTexture = Raylib.LoadTexture("resources/textures/ui/health_bar/heart_full_flash.png");
-            heartEmptyTexture = Raylib.LoadTexture("resources/textures/ui/health_bar/heart_empty.png");
-            heartEmptyFlashTexture = Raylib.LoadTexture("resources/textures/ui/health_bar/heart_empty_flash.png");
-            heartQuarterTexture = Raylib.LoadTexture("resources/textures/ui/health_bar/heart_quarter.png");
-            heartQuarterFlashTexture = Raylib.LoadTexture("resources/textures/ui/health_bar/heart_quarter_flash.png");
-            heartHalfTexture = Raylib.LoadTexture("resources/textures/ui/health_bar/heart_half.png");
-            heartHalfFlashTexture = Raylib.LoadTexture("resources/textures/ui/health_bar/heart_half_flash.png");
+            AssetManager.LoadTexture("heart_full", "resources/textures/ui/health_bar/heart_full.png");
+            AssetManager.LoadTexture("heart_full_flash", "resources/textures/ui/health_bar/heart_full_flash.png");
+            AssetManager.LoadTexture("heart_empty", "resources/textures/ui/health_bar/heart_empty.png");
+            AssetManager.LoadTexture("heart_empty_flash", "resources/textures/ui/health_bar/heart_empty_flash.png");
+            AssetManager.LoadTexture("heart_quarter", "resources/textures/ui/health_bar/heart_quarter.png");
+            AssetManager.LoadTexture("heart_quarter_flash", "resources/textures/ui/health_bar/heart_quarter_flash.png");
+            AssetManager.LoadTexture("heart_half", "resources/textures/ui/health_bar/heart_half.png");
+            AssetManager.LoadTexture("heart_half_flash", "resources/textures/ui/health_bar/heart_half_flash.png");
             texturesLoaded = true;
         }
     }
 
     public void UnloadTextures()
     {
-        if (texturesLoaded)
-        {
-            Raylib.UnloadTexture(heartFullTexture);
-            Raylib.UnloadTexture(heartFullFlashTexture);
-            Raylib.UnloadTexture(heartEmptyTexture);
-            Raylib.UnloadTexture(heartEmptyFlashTexture);
-            Raylib.UnloadTexture(heartQuarterTexture);
-            Raylib.UnloadTexture(heartQuarterFlashTexture);
-            Raylib.UnloadTexture(heartHalfTexture);
-            Raylib.UnloadTexture(heartHalfFlashTexture);
-            texturesLoaded = false;
-        }
+        // Managed by AssetManager.UnloadAll() in Program.cs
     }
 
     public void Draw(int current, int max)
@@ -97,22 +77,23 @@ public class HealthBar
             switch (quarters)
             {
                 case 4:
-                    texture = isFlashing ? heartFullFlashTexture : heartFullTexture;
+                    texture = isFlashing ? AssetManager.GetTexture("heart_full_flash") : AssetManager.GetTexture("heart_full");
                     break;
                 case 3:
-                    texture = isFlashing ? heartQuarterFlashTexture : heartQuarterTexture; // Use quarter flash for 3/4
+                    texture = isFlashing ? AssetManager.GetTexture("heart_quarter_flash") : AssetManager.GetTexture("heart_quarter");
                     break;
                 case 2:
-                    texture = isFlashing ? heartHalfFlashTexture : heartHalfTexture;
+                    texture = isFlashing ? AssetManager.GetTexture("heart_half_flash") : AssetManager.GetTexture("heart_half");
                     break;
                 case 1:
-                    texture = isFlashing ? heartQuarterFlashTexture : heartQuarterTexture;
+                    texture = isFlashing ? AssetManager.GetTexture("heart_quarter_flash") : AssetManager.GetTexture("heart_quarter");
                     break;
                 default:
-                    texture = isFlashing ? heartEmptyFlashTexture : heartEmptyTexture;
+                    texture = isFlashing ? AssetManager.GetTexture("heart_empty_flash") : AssetManager.GetTexture("heart_empty");
                     break;
             }
-            Raylib.DrawTextureEx(texture, new Vector2(xPos, yPos), 0f, heartSize / texture.Width, Color.White);
+            if (texture.Id != 0 && texture.Width > 0)
+                Raylib.DrawTextureEx(texture, new Vector2(xPos, yPos), 0f, heartSize / texture.Width, Color.White);
         }
 
         // Draw text label
