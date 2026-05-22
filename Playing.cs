@@ -1,3 +1,4 @@
+
 using Raylib_cs;
 using System.Numerics;
 using System.Collections.Generic;
@@ -6,6 +7,10 @@ using BulletboxClient; // Added to access Settings and OptionsScreen
 
 public class Playing
 {
+    // Biome chunk system prototype
+    private HashSet<(int, int)> loadedChunks = new();
+    private const int chunkSize = 16;
+    private const int chunkViewRadius = 6; // How many chunks to load around player
     public Player LocalPlayer;
     public int CurrentHealth = 100;
     public int MaxHealth = 100;
@@ -53,7 +58,7 @@ public class Playing
     public void Update()
     {
         float dt = Raylib.GetFrameTime();
-        
+
         // Update Timers every frame
         _cAttackTimer += dt;
         _cHitTimer += dt;
@@ -74,10 +79,31 @@ public class Playing
         Vector2 lastPos = LocalPlayer.Position;
 
         HandleMovement(dt);
-        
+
         // Apply and Decay Knockback Velocity
         LocalPlayer.Position += _kbVelocity * dt;
         _kbVelocity = Vector2.Lerp(_kbVelocity, Vector2.Zero, dt * 6.5f); // Smooth friction
+
+        // Biome chunk loading/unloading
+        int playerChunkX = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
+        int playerChunkY = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
+        HashSet<(int, int)> needed = new();
+        for (int dx = -chunkViewRadius; dx <= chunkViewRadius; dx++)
+        {
+            for (int dy = -chunkViewRadius; dy <= chunkViewRadius; dy++)
+            {
+                int cx = playerChunkX + dx;
+                int cy = playerChunkY + dy;
+                needed.Add((cx, cy));
+                if (!loadedChunks.Contains((cx, cy)))
+                {
+                    Program.Net.SendChunkRequest(cx, cy);
+                    loadedChunks.Add((cx, cy));
+                }
+            }
+        }
+        // Unload far chunks
+        loadedChunks.RemoveWhere(c => !needed.Contains(c));
 
         // Update player animations
         LocalPlayer.Update(dt);
@@ -89,7 +115,7 @@ public class Playing
 
         // Update camera AFTER all movement (including knockback) to prevent jitter
         Cam.Update(LocalPlayer.Position, dt);
-        
+
         // Apply FOV setting from Options
         Cam.Zoom = Settings.FOV; // Assuming CameraManager now has a public 'Zoom' property
 
@@ -158,6 +184,22 @@ public class Playing
         Raylib.DrawRectangle(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(0, 0, 0, 100));
 
         Cam.Begin();
+            // Draw biome chunks (thread-safe snapshot)
+            List<KeyValuePair<(int, int), byte>> chunkSnapshot;
+            lock (Program.Net.ChunkBiomesLock)
+            {
+                chunkSnapshot = new List<KeyValuePair<(int, int), byte>>(Program.Net.ChunkBiomes);
+            }
+            foreach (var chunk in chunkSnapshot)
+            {
+                int cx = chunk.Key.Item1;
+                int cy = chunk.Key.Item2;
+                byte biome = chunk.Value;
+                Color color = biome == 0 ? new Color(180, 255, 180, 255) : new Color(34, 139, 34, 255); // Meadow: light green, Forest: dark green
+                float wx = cx * chunkSize;
+                float wy = cy * chunkSize;
+                Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, color);
+            }
             foreach (var other in Others.Values) 
             {   
                 other.Draw(); // Draw other players

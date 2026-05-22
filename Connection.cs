@@ -1,11 +1,29 @@
+
 using System;
 using System.Net.Sockets;
 using System.IO;
 using System.Threading;
 using System.Numerics;
 
+
 public class Connection
 {
+    // Biome chunk cache for prototype
+    public Dictionary<(int, int), byte> ChunkBiomes = new();
+    public readonly object ChunkBiomesLock = new();
+
+        public void SendChunkRequest(int chunkX, int chunkY)
+        {
+            if (!_isConnected || _writer == null) return;
+            try
+            {
+                _writer.Write((byte)10); // Packet ID 10 for chunk request
+                _writer.Write(chunkX);
+                _writer.Write(chunkY);
+                _writer.Flush();
+            }
+            catch { _isConnected = false; }
+        }
     private TcpClient? _client;
     private BinaryWriter? _writer;
     private BinaryReader? _reader;
@@ -118,6 +136,16 @@ public class Connection
                     float forceY = _reader.ReadSingle();
                     if (Program.PlayingState != null)
                         Program.PlayingState.ApplyKnockback(new Vector2(forceX, forceY));
+                }
+                else if (packetId == 10) // Chunk Data
+                {
+                    int chunkX = _reader.ReadInt32();
+                    int chunkY = _reader.ReadInt32();
+                    byte biome = _reader.ReadByte();
+                    lock (ChunkBiomesLock)
+                    {
+                        ChunkBiomes[(chunkX, chunkY)] = biome;
+                    }
                 }
             }
         }
