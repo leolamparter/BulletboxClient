@@ -164,6 +164,15 @@ public class Connection
                     if (Program.PlayingState != null)
                         Program.PlayingState.AddChatMessage(sender, msg);
                 }
+                else if (packetId == 9) // SERVER BROADCAST: PLAYER LEFT
+                {
+                    string name = _reader.ReadString();
+                    if (Program.PlayingState != null)
+                    {
+                        Program.PlayingState.Others.Remove(name);
+                        Console.WriteLine($"Player {name} left the world.");
+                    }
+                }
             }
         }
         catch (EndOfStreamException)

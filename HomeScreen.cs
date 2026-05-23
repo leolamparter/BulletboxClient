@@ -41,7 +41,10 @@ public class HomeScreen
                     else 
                         Program.CurrentState = GameState.LOGIN;
                 }
-                if (i == 2) Console.WriteLine("Open Friends List");
+                if (i == 2) {
+                    Program.CurrentState = GameState.FRIENDS;
+                    LanDiscovery.StartListening();
+                }
                 if (i == 3) {
                     Program.cameFrom = GameState.HOME;
                     Program.CurrentState = GameState.OPTIONS;

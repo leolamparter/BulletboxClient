@@ -10,6 +10,7 @@ public class PauseMenu
     {
         buttons.Add(new UIButton("BACK TO GAME", Vector2.Zero, 30, true));
         buttons.Add(new UIButton("OPTIONS", Vector2.Zero, 30));
+        buttons.Add(new UIButton("OPEN TO LAN", Vector2.Zero, 30));
         buttons.Add(new UIButton("DISCONNECT", Vector2.Zero, 30));
     }
 
@@ -29,14 +30,19 @@ public class PauseMenu
                     Program.cameFrom = GameState.PLAYING;
                     Program.CurrentState = GameState.OPTIONS;
                 }
-                if (i == 2) Program.DisconnectAndLeave();
+                if (i == 2) {
+                    if (ServerProgram.IsRunning) {
+                        LanDiscovery.StartBroadcasting(32308, Program.CurrentUser.Username);
+                        buttons[2].Text = "LAN OPENED!";
+                    }
+                }
+                if (i == 3) Program.DisconnectAndLeave();
             }
         }
     }
 
     public void Draw()
     {
-        Program.PlayingState?.Update();
         Raylib.DrawRectangle(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(0, 0, 0, 150));
         Raylib.DrawText("PAUSED", (int)(Raylib.GetScreenWidth()/2 - 70), (int)(Raylib.GetScreenHeight()/2 - 120), 40, Color.Yellow);
         foreach (var btn in buttons) btn.Draw();

@@ -4,7 +4,7 @@ using System;
 using BulletboxClient;
 using DiscordRPC;
 
-public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING }
+public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, FRIENDS }
 
 class Program
 {
@@ -33,6 +33,7 @@ class Program
         HomeScreen homeScreen = new HomeScreen();
         LoginScreen loginScreen = new LoginScreen();
         pauseMenu = new PauseMenu(); // Initialize the menu
+        FriendsScreen friendsScreen = new FriendsScreen();
         OptionsScreen optionsScreen = new OptionsScreen();
 
         // Initialize
@@ -58,20 +59,20 @@ class Program
             }
 
             // --- UPDATE ---
-            if (IsPaused && CurrentState == GameState.PLAYING)
+            switch (CurrentState)
             {
-                pauseMenu.Update();
-            }
-            else 
-            {
-                switch (CurrentState)
-                {
-                    case GameState.HOME:
-                        homeScreen.Update();
-                        break;
+                case GameState.HOME:
+                    homeScreen.Update();
+                    break;
                 case GameState.SINGLEPLAYER_CONNECTING:
                     // 1. Start the integrated server (it checks if it's already running)
                     _ = ServerProgram.RunServerAsync();
+
+                    // 2. Initialize PlayingState NOW so it's ready for packets
+                    if (PlayingState == null)
+                    {
+                        PlayingState = new Playing(string.IsNullOrEmpty(CurrentUser.Username) ? "Player" : CurrentUser.Username);
+                    }
 
                     // 2. Ensure a fallback username for local play
                     if (string.IsNullOrEmpty(CurrentUser.Username)) CurrentUser.Username = "Player";
@@ -81,25 +82,37 @@ class Program
 
                     if (Net.IsConnected()) CurrentState = GameState.PLAYING;
                     break;
-                    case GameState.LOGIN:
-                        loginScreen.Update();
-                        if (CurrentUser.HasLoggedIn) CurrentState = GameState.PLAYING;
-                        break;
-                    case GameState.PLAYING:
-                        if (PlayingState == null)
-                        {
-                            PlayingState = new Playing(CurrentUser.Username);
-                            
-                            // Only initiate a connection if we aren't already connected via singleplayer
-                            if (!Net.IsConnected())
-                                Net.Connect("127.0.0.1", 32308, CurrentUser.Username, CurrentUser.Password);
-                        }
-                        PlayingState.Update();
-                        break;
-                    case GameState.OPTIONS:
-                        optionsScreen.Update();
-                        break;
-                }
+                case GameState.LOGIN:
+                    loginScreen.Update();
+                    if (CurrentUser.HasLoggedIn) CurrentState = GameState.PLAYING;
+                    break;
+                case GameState.PLAYING:
+                    // Safety: Ensure PlayingState is initialized regardless of how we entered the state
+                    if (PlayingState == null)
+                    {
+                        PlayingState = new Playing(string.IsNullOrEmpty(CurrentUser.Username) ? "Player" : CurrentUser.Username);
+                    }
+
+                    // Only initiate a connection if we aren't already connected (e.g. coming from Home -> Multiplayer)
+                    if (!Net.IsConnected())
+                    {
+                        Net.Connect("127.0.0.1", 32308, CurrentUser.Username, CurrentUser.Password);
+                    }
+
+                    // Always update playing state so networking/health packets process
+                    PlayingState.Update();
+
+                    if (IsPaused) pauseMenu.Update();
+
+                    // Death Check: Kick on death
+                    if (PlayingState != null && PlayingState.CurrentHealth <= 0) Program.DisconnectAndLeave();
+                    break;
+                case GameState.FRIENDS:
+                    friendsScreen.Update();
+                    break;
+                case GameState.OPTIONS:
+                    optionsScreen.Update();
+                    break;
             }
 
             // --- DRAW ---
@@ -131,6 +144,9 @@ class Program
                     if (cameFrom == GameState.PLAYING) PlayingState?.Draw();
                     optionsScreen.Draw();
                     break;
+                case GameState.FRIENDS:
+                    friendsScreen.Draw();
+                    break;
             }
             Raylib.EndDrawing();
         }
@@ -142,7 +158,10 @@ class Program
 
     public static void DisconnectAndLeave()
     {
-        Net.Disconnect();      
+        Net.Disconnect();
+        LanDiscovery.StopListening();
+        LanDiscovery.StopBroadcasting();
+        ServerProgram.IsRunning = false;
         PlayingState = null;   
         IsPaused = false;      
         CurrentState = GameState.HOME;

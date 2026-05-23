@@ -71,6 +71,7 @@ public class ServerPlayer
                         Writer.Write((byte)0);
                         Writer.Write(true);
                         SendFullInventory();
+                        SyncHealth(); // Send initial health state immediately upon login
                     }
                     Console.WriteLine($"[Handshake] {Username} is in.");
                 }
@@ -233,6 +234,31 @@ public class ServerPlayer
         }
     }
 
-    public void Damage(int amount) { /* Implementation omitted for brevity */ }
-    public void SyncHealth() { /* Implementation omitted for brevity */ }
+    public void SendLeaveSignal(string username)
+    {
+        lock (WriterLock)
+        {
+            Writer.Write((byte)9); // Packet ID 9: Player Left
+            Writer.Write(username);
+            Writer.Flush();
+        }
+    }
+
+    public void Damage(int amount) 
+    {
+        Health -= amount;
+        if (Health < 0) Health = 0;
+        SyncHealth();
+    }
+
+    public void SyncHealth() 
+    {
+        lock (WriterLock)
+        {
+            Writer.Write((byte)5); // Packet ID 5: Health Sync
+            Writer.Write(Health);
+            Writer.Write(MaxHealth);
+            Writer.Flush();
+        }
+    }
 }
