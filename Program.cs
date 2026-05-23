@@ -69,6 +69,18 @@ class Program
                     case GameState.HOME:
                         homeScreen.Update();
                         break;
+                case GameState.SINGLEPLAYER_CONNECTING:
+                    // 1. Start the integrated server (it checks if it's already running)
+                    _ = ServerProgram.RunServerAsync();
+
+                    // 2. Ensure a fallback username for local play
+                    if (string.IsNullOrEmpty(CurrentUser.Username)) CurrentUser.Username = "Player";
+
+                    // 3. Attempt connection to localhost. Net.Connect handles errors internally.
+                    Net.Connect("127.0.0.1", 32308, CurrentUser.Username, "local_auth");
+
+                    if (Net.IsConnected()) CurrentState = GameState.PLAYING;
+                    break;
                     case GameState.LOGIN:
                         loginScreen.Update();
                         if (CurrentUser.HasLoggedIn) CurrentState = GameState.PLAYING;
@@ -77,7 +89,10 @@ class Program
                         if (PlayingState == null)
                         {
                             PlayingState = new Playing(CurrentUser.Username);
-                            Net.Connect("127.0.0.1", 32308, CurrentUser.Username, CurrentUser.Password);
+                            
+                            // Only initiate a connection if we aren't already connected via singleplayer
+                            if (!Net.IsConnected())
+                                Net.Connect("127.0.0.1", 32308, CurrentUser.Username, CurrentUser.Password);
                         }
                         PlayingState.Update();
                         break;
