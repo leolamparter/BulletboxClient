@@ -19,7 +19,8 @@ public class HomeScreen
         buttons = new List<UIButton>();
 
         // We initialize with dummy positions; Draw() will position them correctly
-        buttons.Add(new UIButton("PLAY", Vector2.Zero, 40, true));
+        buttons.Add(new UIButton("SINGLEPLAYER", Vector2.Zero, 40, true));
+        buttons.Add(new UIButton("MULTIPLAYER", Vector2.Zero, 40));
         buttons.Add(new UIButton("MODS", Vector2.Zero, 40));
         buttons.Add(new UIButton("OPTIONS", Vector2.Zero, 40));
         buttons.Add(new UIButton("QUIT GAME", Vector2.Zero, 40));
@@ -32,19 +33,20 @@ public class HomeScreen
         {
             if (buttons[i].IsClicked())
             {
-                if (i == 0)
+                if (i == 0) Program.CurrentState = GameState.SINGLEPLAYER_CONNECTING;
+                if (i == 1)
                 {
                     if (Program.CurrentUser.HasLoggedIn) 
                         Program.CurrentState = GameState.PLAYING;
                     else 
                         Program.CurrentState = GameState.LOGIN;
                 }
-                if (i == 1) Console.WriteLine("Mods!");
-                if (i == 2) {
+                if (i == 2) Console.WriteLine("Mods!");
+                if (i == 3) {
                     Program.cameFrom = GameState.HOME;
                     Program.CurrentState = GameState.OPTIONS;
                 }
-                if (i == 3) Environment.Exit(0);
+                if (i == 4) Environment.Exit(0);
             }
         }
     }

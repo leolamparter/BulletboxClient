@@ -42,6 +42,7 @@ public class Connection
             // 1. Send Login
             _writer.Write((byte)0);
             _writer.Write(user);
+            _writer.Write("26.1.1-02a"); // Send client version to match server expectations
             _writer.Write(pass);
             _writer.Flush(); 
 

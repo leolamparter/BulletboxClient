@@ -4,7 +4,7 @@ using System;
 using BulletboxClient;
 using DiscordRPC;
 
-public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS }
+public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING }
 
 class Program
 {
@@ -95,6 +95,13 @@ class Program
             {
                 case GameState.HOME:
                     homeScreen.Draw();
+                    break;
+                case GameState.SINGLEPLAYER_CONNECTING:
+                    HomeScreen.background.Update();
+                    HomeScreen.background.Draw();
+                    string connText = "Connecting to integrated server...";
+                    int connWidth = Raylib.MeasureText(connText, 30);
+                    Raylib.DrawText(connText, Raylib.GetScreenWidth() / 2 - connWidth / 2, Raylib.GetScreenHeight() / 2, 30, Color.White);
                     break;
                 case GameState.LOGIN:
                     HomeScreen.background.Update();
