@@ -5,6 +5,24 @@ using System.Collections.Generic;
 using System; // For Console
 using BulletboxClient; // Added to access Settings and OptionsScreen
 
+// Duplicated from server for client-side rendering logic
+public enum FeatureType
+{
+    None,
+    SmallTree,
+    LargeTree,
+    MeadowHedge,
+    MeadowFlowers,
+    Stone,
+    PalmTree,
+    DesertLog,
+    Tumbleweed,
+    OasisDesert,
+    BeachUmbrella,
+    Sailboat,
+    SulfurSpring
+}
+
 public class Playing
 {
     // Biome chunk system prototype
@@ -23,6 +41,7 @@ public class Playing
     
     // Optimization Caches
     private Dictionary<(int, int), byte> _chunkSnapshot = new();
+    private Dictionary<(int, int), byte> _featureSnapshot = new();
     private Dictionary<(int, int), Color> _blendedColorCache = new();
     private HashSet<(int, int)> _pendingBlends = new();
     private int _lastPlayerChunkX = int.MaxValue;
@@ -53,6 +72,19 @@ public class Playing
         // Load Hotbar UI Textures
         AssetManager.LoadTexture("hotbar_active", "resources/textures/ui/inventory/hotbar_active.png");
         AssetManager.LoadTexture("hotbar_deactive", "resources/textures/ui/inventory/hotbar_deactive.png");
+
+        AssetManager.LoadTexture("small_tree", "resources/textures/feature/small_tree.png");
+        AssetManager.LoadTexture("large_tree", "resources/textures/feature/large_tree.png");
+        AssetManager.LoadTexture("meadow_hedge", "resources/textures/feature/meadow_hedge.png");
+        AssetManager.LoadTexture("meadow_flowers", "resources/textures/feature/meadow_flowers.png");
+        AssetManager.LoadTexture("stone", "resources/textures/feature/stone.png");
+        AssetManager.LoadTexture("palm_tree", "resources/textures/feature/palm_tree.png");
+        AssetManager.LoadTexture("desert_log", "resources/textures/feature/desert_log.png");
+        AssetManager.LoadTexture("tumbleweed", "resources/textures/feature/tumbleweed.png");
+        AssetManager.LoadTexture("oasis_desert", "resources/textures/feature/oasis_desert.png");
+        AssetManager.LoadTexture("beach_umbrella", "resources/textures/feature/beach_umbrella.png");
+        AssetManager.LoadTexture("sailboat", "resources/textures/feature/sailboat.png");
+        AssetManager.LoadTexture("sulfur_spring", "resources/textures/feature/sulfur_spring.png");
 
         if (AssetManager.GetTexture("hotbar_active").Id == 0) Console.WriteLine("ERROR: 'hotbar_active' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_active.png");
         if (AssetManager.GetTexture("hotbar_deactive").Id == 0) Console.WriteLine("ERROR: 'hotbar_deactive' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_deactive.png");
@@ -149,6 +181,7 @@ public class Playing
                     }
                 }
                 _chunkSnapshot = new Dictionary<(int, int), byte>(Program.Net.ChunkBiomes);
+                _featureSnapshot = new Dictionary<(int, int), byte>(Program.Net.ChunkFeatures);
             }
         }
 
@@ -301,35 +334,112 @@ public class Playing
         Raylib.DrawRectangle(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(0, 0, 0, 100));
 
         Cam.Begin();
-            // Optimization: Calculate screen bounds to skip drawing off-screen chunks
-            var screenTopLeft = Raylib.GetScreenToWorld2D(new Vector2(0, 0), Cam.RaylibCamera);
-            var screenBottomRight = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), Cam.RaylibCamera);
-            int margin = chunkSize * 2;
+        // Optimization: Calculate screen bounds to skip drawing off-screen chunks
+        var screenTopLeft = Raylib.GetScreenToWorld2D(new Vector2(0, 0), Cam.RaylibCamera);
+        var screenBottomRight = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), Cam.RaylibCamera);
+        int margin = chunkSize * 2;
 
-            foreach (var coord in loadedChunks)
+        foreach (var coord in loadedChunks)
+        {
+            float wx = coord.Item1 * chunkSize;
+            float wy = coord.Item2 * chunkSize;
+
+            // Frustum Culling: Only draw if the chunk is visible
+            if (wx + chunkSize < screenTopLeft.X - margin || wx > screenBottomRight.X + margin || 
+                wy + chunkSize < screenTopLeft.Y - margin || wy > screenBottomRight.Y + margin) continue;
+
+            if (!_blendedColorCache.TryGetValue(coord, out Color drawColor))
+                if (_chunkSnapshot.TryGetValue(coord, out byte b)) drawColor = GetBiomeBaseColor(b); else continue;
+
+            Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, drawColor);
+
+            if (_chunkSnapshot.TryGetValue(coord, out byte biome) && biome == 6)
+                Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, new Color(255, 200, 60, 50));
+        }
+
+        // Feature Pass
+        foreach (var coord in loadedChunks)
+        {
+            float wx = coord.Item1 * chunkSize;
+            float wy = coord.Item2 * chunkSize;
+
+            if (wx + chunkSize < screenTopLeft.X - margin || wx > screenBottomRight.X + margin || 
+                wy + chunkSize < screenTopLeft.Y - margin || wy > screenBottomRight.Y + margin) continue;
+
+            if (_featureSnapshot.TryGetValue(coord, out byte feature) && feature != 0)
             {
-                float wx = coord.Item1 * chunkSize;
-                float wy = coord.Item2 * chunkSize;
+                string texName = "";
+                bool isSmall = false;
+                FeatureType type = (FeatureType)feature;
 
-                // Frustum Culling: Only draw if the chunk is visible
-                if (wx + chunkSize < screenTopLeft.X - margin || wx > screenBottomRight.X + margin || 
-                    wy + chunkSize < screenTopLeft.Y - margin || wy > screenBottomRight.Y + margin) continue;
+                switch (type)
+                {
+                    case FeatureType.LargeTree: texName = "large_tree"; break;
+                    case FeatureType.SmallTree: texName = "small_tree"; break;
+                    case FeatureType.MeadowHedge: texName = "meadow_hedge"; isSmall = true; break;
+                    case FeatureType.MeadowFlowers: texName = "meadow_flowers"; isSmall = true; break;
+                    case FeatureType.Stone: texName = "stone"; isSmall = true; break;
+                    case FeatureType.PalmTree: texName = "palm_tree"; break;
+                    case FeatureType.DesertLog: texName = "desert_log"; isSmall = true; break;
+                    case FeatureType.Tumbleweed: texName = "tumbleweed"; isSmall = true; break;
+                    case FeatureType.OasisDesert: texName = "oasis_desert"; break;
+                    case FeatureType.BeachUmbrella: texName = "beach_umbrella"; isSmall = true; break;
+                    case FeatureType.Sailboat: texName = "sailboat"; break;
+                    case FeatureType.SulfurSpring: texName = "sulfur_spring"; break;
+                }
 
-                if (!_blendedColorCache.TryGetValue(coord, out Color drawColor))
-                    if (_chunkSnapshot.TryGetValue(coord, out byte b)) drawColor = GetBiomeBaseColor(b); else continue;
+                if (string.IsNullOrEmpty(texName)) continue;
 
-                Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, drawColor);
+                var tex = AssetManager.GetTexture(texName);
 
-                if (_chunkSnapshot.TryGetValue(coord, out byte biome) && biome == 6)
-                    Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, new Color(255, 200, 60, 50));
+                if (tex.Id != 0)
+                {
+                    if (isSmall)
+                    {
+                        float scale = (type == FeatureType.MeadowFlowers) ? 0.35f : 0.5f;
+                        Rectangle source = new Rectangle(0, 0, tex.Width, tex.Height);
+
+                        Rectangle dest = new Rectangle(
+                            wx + 8,
+                            wy + 8,
+                            tex.Width * scale,
+                            tex.Height * scale
+                        );
+
+                        Vector2 origin = new Vector2(
+                            (tex.Width * scale) / 2f,
+                            tex.Height * scale
+                        );
+
+                        Raylib.DrawTexturePro(
+                            tex,
+                            source,
+                            dest,
+                            origin,
+                            0f,
+                            Color.White
+                        );
+                    }
+                    else
+                    {
+                        Raylib.DrawTexture(
+                            tex,
+                            (int)wx - (tex.Width / 2) + 8,
+                            (int)wy - tex.Height + 16,
+                            Color.White
+                        );
+                    }
+                }
             }
-            foreach (var other in Others.Values) 
-            {   
-                other.Draw(); // Draw other players
-                Debug.DrawHitbox(other.Position);
-            }
-            LocalPlayer.Draw(); // Draw the local player
-            Debug.DrawHitbox(LocalPlayer.Position);
+        }
+
+        foreach (var other in Others.Values) 
+        {   
+            other.Draw(); // Draw other players
+            Debug.DrawHitbox(other.Position);
+        }
+        LocalPlayer.Draw(); // Draw the local player
+        Debug.DrawHitbox(LocalPlayer.Position);
         Cam.End();
 
         Hotbar.Draw();

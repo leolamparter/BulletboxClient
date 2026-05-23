@@ -10,6 +10,7 @@ public class Connection
 {
     // Biome chunk cache for prototype
     public Dictionary<(int, int), byte> ChunkBiomes = new();
+    public Dictionary<(int, int), byte> ChunkFeatures = new();
     public readonly object ChunkBiomesLock = new();
 
         public void SendChunkRequest(int chunkX, int chunkY)
@@ -142,9 +143,11 @@ public class Connection
                     int chunkX = _reader.ReadInt32();
                     int chunkY = _reader.ReadInt32();
                     byte biome = _reader.ReadByte();
+                    byte feature = _reader.ReadByte();
                     lock (ChunkBiomesLock)
                     {
                         ChunkBiomes[(chunkX, chunkY)] = biome;
+                        ChunkFeatures[(chunkX, chunkY)] = feature;
                     }
                 }
             }
