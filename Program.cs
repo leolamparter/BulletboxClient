@@ -2,6 +2,7 @@
 using System.Numerics;
 using System;
 using BulletboxClient;
+using DiscordRPC;
 
 public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS }
 
@@ -34,8 +35,22 @@ class Program
         pauseMenu = new PauseMenu(); // Initialize the menu
         OptionsScreen optionsScreen = new OptionsScreen();
 
+        // Initialize
+        var client = new DiscordRpcClient("1507766634889347295");
+        client.Initialize();
+
+        // Set static presence
+        client.SetPresence(new RichPresence()
+        {
+            Details = "Playing Bulletbox",
+            State = "In A World"
+        });
+
+
         while (!Raylib.WindowShouldClose())
         {
+            // Call this inside your main update/tick loop (e.g., in Raylib)
+            client.Invoke();
             // Toggle Pause with ESC only when in-game
             if (Raylib.IsKeyPressed(KeyboardKey.Escape)) 
             {
@@ -98,6 +113,8 @@ class Program
             Raylib.EndDrawing();
         }
 
+        // Call this when the game closes
+        client.Dispose();
         Raylib.CloseWindow();
     }
 

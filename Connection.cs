@@ -88,6 +88,8 @@ public class Connection
                     string name = _reader.ReadString();
                     float x = _reader.ReadSingle();
                     float y = _reader.ReadSingle();
+                    float rot = _reader.ReadSingle();
+                    byte heldId = _reader.ReadByte();
 
                     // Safety check: Don't process if the game state changed
                     if (Program.PlayingState != null)
@@ -96,6 +98,8 @@ public class Connection
                         if (Program.PlayingState.Others.ContainsKey(name))
                         {
                             Program.PlayingState.Others[name].Position = new Vector2(x, y);
+                            Program.PlayingState.Others[name].Rotation = rot;
+                            Program.PlayingState.Others[name].HeldItemID = heldId;
                         }
                         // If it's a new player (and not us), add them to the world
                         else if (name != Program.CurrentUser.Username)
@@ -104,6 +108,8 @@ public class Connection
                             // Create the player at the received position
                             Player newRemotePlayer = new Player(name, new Vector2(x, y));
                             newRemotePlayer.Color = Raylib_cs.Color.White; // Remote players are white
+                            newRemotePlayer.Rotation = rot;
+                            newRemotePlayer.HeldItemID = heldId;
                             
                             Program.PlayingState.Others[name] = newRemotePlayer;
                         }
@@ -150,6 +156,13 @@ public class Connection
                         ChunkFeatures[(chunkX, chunkY)] = feature;
                     }
                 }
+                else if (packetId == 8) // Incoming Chat
+                {
+                    string sender = _reader.ReadString();
+                    string msg = _reader.ReadString();
+                    if (Program.PlayingState != null)
+                        Program.PlayingState.AddChatMessage(sender, msg);
+                }
             }
         }
         catch (EndOfStreamException)
@@ -170,7 +183,7 @@ public class Connection
         }
     }
 
-    public void SendPosition(float x, float y)
+    public void SendPosition(float x, float y, float rotation)
     {
         if (!_isConnected || _writer == null) return;
         try
@@ -178,6 +191,7 @@ public class Connection
             _writer.Write((byte)1); // Movement Packet ID
             _writer.Write(x);
             _writer.Write(y);
+            _writer.Write(rotation);
             _writer.Flush();
         }
         catch { _isConnected = false; }
@@ -213,6 +227,18 @@ public class Connection
         {
             _writer.Write((byte)6); // Packet ID 6
             _writer.Write(targetName);
+            _writer.Flush();
+        }
+        catch { _isConnected = false; }
+    }
+
+    public void SendChat(string message)
+    {
+        if (!_isConnected || _writer == null) return;
+        try
+        {
+            _writer.Write((byte)8); // Packet ID 8
+            _writer.Write(message);
             _writer.Flush();
         }
         catch { _isConnected = false; }

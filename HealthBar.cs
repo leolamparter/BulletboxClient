@@ -3,9 +3,6 @@ using System.Numerics;
 
 public class HealthBar
 {
-    private float visualHealth = 100f; // For smooth animation
-    private float lerpSpeed = 5f;
-    
     private bool texturesLoaded = false;
 
     private int previousHearts = 10;

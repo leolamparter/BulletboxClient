@@ -43,3 +43,5 @@
 /Users/Movies/Bulletbox/BulletboxClient/obj/Debug/net10.0/Bulletbox.genruntimeconfig.cache
 /Users/Movies/Bulletbox/BulletboxClient/obj/Debug/net10.0/ref/Bulletbox.dll
 /Users/Movies/Bulletbox/BulletboxClient/obj/Debug/net10.0/Bulletbox.sourcelink.json
+/Users/Movies/Bulletbox/BulletboxClient/bin/Debug/net10.0/DiscordRPC.dll
+/Users/Movies/Bulletbox/BulletboxClient/bin/Debug/net10.0/Newtonsoft.Json.dll

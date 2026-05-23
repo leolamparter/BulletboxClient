@@ -11,6 +11,9 @@ public class Player
     public int Health = 100;
     public int MaxHealth = 100;
     public bool FacingRight = true;
+    public float Rotation = 0f;
+    public byte HeldItemID = 0;
+    public float AttackAnimProgress = 0f;
 
     private float _rotation = 0f;
     private const float _rotationSpeed = 150f; // Degrees per second
@@ -33,6 +36,12 @@ public class Player
         _rotation += _rotationSpeed * dt;
         if (_rotation >= 360f) _rotation -= 360f;
         if (_rotation < 0f) _rotation += 360f;
+
+        if (AttackAnimProgress > 0)
+        {
+            AttackAnimProgress -= dt / 0.2f; // Animation duration: 0.2 seconds
+            if (AttackAnimProgress < 0) AttackAnimProgress = 0;
+        }
 
         // Initialize and Update the pixelated texture OUTSIDE of the Camera Mode
         // This prevents the camera matrix from being discarded during the draw call.
@@ -70,6 +79,11 @@ public class Player
         Raylib.EndTextureMode();
     }
 
+    public void TriggerAttack()
+    {
+        AttackAnimProgress = 1.0f;
+    }
+
     public void Draw()
     {
         // Calculate the center of the player for rotation
@@ -79,8 +93,57 @@ public class Player
         Rectangle source = new Rectangle(0, 0, 24, -24);
         Rectangle dest = new Rectangle(center.X, center.Y, 96, 96);
         Vector2 destOrigin = new Vector2(48, 48); // Center the 96x96 texture on the player center
-        
+
+        // 1. Determine which weapon texture to use
+        string weaponKey = HeldItemID == (byte)'K' ? "kanabo" : (HeldItemID == (byte)'P' ? "spear" : (HeldItemID == (byte)'S' ? "sword" : ""));
+        Texture2D weaponTex = !string.IsNullOrEmpty(weaponKey) ? AssetManager.GetTexture(weaponKey) : new Texture2D();
+
+        // 2. Depth Sorting: If pointing 'up' (-20 to -160 degrees), draw weapon behind player
+        bool weaponBehind = Rotation < -20 && Rotation > -160;
+
+        void DrawWeapon()
+        {
+            if (weaponTex.Id == 0) return;
+            
+            float scale = 1.0f; // 2x larger than previous 0.5f
+            float currentHoldRadius = 24f; // Base distance from center to "hand"
+            float visualRotation = Rotation;
+
+            // 2. Apply Animation Offsets
+            if (AttackAnimProgress > 0)
+            {
+                float t = 1.0f - AttackAnimProgress; // 0.0 to 1.0 progress
+                
+                if (HeldItemID == (byte)'P') // Spear: Stab (Linear thrust)
+                {
+                    currentHoldRadius += MathF.Sin(t * MathF.PI) * 45f;
+                }
+                else if (HeldItemID == (byte)'S' || HeldItemID == (byte)'K') // Sword/Kanabo: Swing (Arc)
+                {
+                    visualRotation += (t * 120f) - 60f;
+                }
+            }
+
+            // Calculate hand position relative to center using possibly modified radius/rotation
+            float rad = visualRotation * (MathF.PI / 180f);
+            Vector2 handPos = new Vector2(
+                center.X + MathF.Cos(rad) * currentHoldRadius,
+                center.Y + MathF.Sin(rad) * currentHoldRadius
+            );
+
+            Rectangle src = new Rectangle(0, 0, weaponTex.Width, weaponTex.Height);
+            Rectangle wDest = new Rectangle(handPos.X, handPos.Y, weaponTex.Width * scale, weaponTex.Height * scale);
+            
+            // Pivot at the middle-left (the handle)
+            Vector2 origin = new Vector2(0, (weaponTex.Height * scale) / 2);
+            
+            Raylib.DrawTexturePro(weaponTex, src, wDest, origin, visualRotation, Color.White);
+        }
+
+        // 3. Execution Pass
+        if (weaponBehind) DrawWeapon();
         Raylib.DrawTexturePro(_pixelTarget.Texture, source, dest, destOrigin, 0f, Color.White);
+        if (!weaponBehind) DrawWeapon();
 
         // 3. Draw Name Tag
         int textWidth = Raylib.MeasureText(Name, 20);

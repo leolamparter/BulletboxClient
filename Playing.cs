@@ -54,6 +54,12 @@ public class Playing
     private int _selectedHotbarIndex = 0;
     private Vector2 _kbVelocity = Vector2.Zero;
     
+    // Chat and UI State
+    private bool _isChatting = false;
+    private string _chatInput = "";
+    private List<(string sender, string msg, float time)> _chatLog = new();
+
+    private List<(Player player, Vector2 screenPos, float rotation)> _playerArrows = new();
 
     public Playing(string myName)
     {
@@ -86,8 +92,19 @@ public class Playing
         AssetManager.LoadTexture("sailboat", "resources/textures/feature/sailboat.png");
         AssetManager.LoadTexture("sulfur_spring", "resources/textures/feature/sulfur_spring.png");
 
+        // Re-verify these paths match your request
+        AssetManager.LoadTexture("kanabo", "resources/textures/item/kanabo.png");
+        AssetManager.LoadTexture("spear", "resources/textures/item/spear.png");
+        AssetManager.LoadTexture("sword", "resources/textures/item/sword.png");
+
         if (AssetManager.GetTexture("hotbar_active").Id == 0) Console.WriteLine("ERROR: 'hotbar_active' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_active.png");
         if (AssetManager.GetTexture("hotbar_deactive").Id == 0) Console.WriteLine("ERROR: 'hotbar_deactive' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_deactive.png");
+    }
+
+    public void AddChatMessage(string sender, string msg)
+    {
+        _chatLog.Add((sender, msg, (float)Raylib.GetTime()));
+        if (_chatLog.Count > 50) _chatLog.RemoveAt(0);
     }
 
     public void ApplyKnockback(Vector2 force)
@@ -99,12 +116,18 @@ public class Playing
     {
         float dt = Raylib.GetFrameTime();
 
+        // Reset tooltip state for the frame
+        HotbarUI.HoveredStack = null;
+
         // Update Timers every frame
         _cAttackTimer += dt;
         _cHitTimer += dt;
 
         // Handle Debug inputs
         Debug.Update();
+
+        HandleChatInput();
+        if (_isChatting) return; // Block game input while chatting
 
         // Handle Hotbar Selection (Keys 1-6)
         for (int i = 0; i < 6; i++)
@@ -199,6 +222,62 @@ public class Playing
 
         ProcessPendingBlends();
 
+        // Clear previous arrows
+        _playerArrows.Clear();
+
+        // Find nearest two players and prepare arrow data
+        List<(Player player, float distance)> sortedOthers = new();
+        foreach (var other in Others.Values)
+        {
+            float dist = Vector2.Distance(LocalPlayer.Position, other.Position);
+            sortedOthers.Add((other, dist));
+        }
+        sortedOthers.Sort((a, b) => a.distance.CompareTo(b.distance));
+
+        int playersToTrack = Math.Min(2, sortedOthers.Count);
+        for (int i = 0; i < playersToTrack; i++)
+        {
+            Player targetPlayer = sortedOthers[i].player;
+            Vector2 targetWorldPos = targetPlayer.Position + new Vector2(32, 32); // Center of the other player
+
+            // Convert target's world position to screen position
+            Vector2 targetScreenPos = Raylib.GetWorldToScreen2D(targetWorldPos, Cam.RaylibCamera);
+
+            int screenWidth = Raylib.GetScreenWidth();
+            int screenHeight = Raylib.GetScreenHeight();
+            Vector2 screenCenter = new Vector2(screenWidth / 2f, screenHeight / 2f);
+
+            // Check if player is on screen
+            bool onScreen = targetScreenPos.X >= 0 && targetScreenPos.X <= screenWidth &&
+                            targetScreenPos.Y >= 0 && targetScreenPos.Y <= screenHeight;
+
+            if (!onScreen)
+            {
+                // Calculate direction vector from screen center to target
+                Vector2 dir = Vector2.Normalize(targetScreenPos - screenCenter);
+                float angle = MathF.Atan2(dir.Y, dir.X) * (180f / MathF.PI);
+
+                // Calculate intersection with screen edges
+                Vector2 arrowPos = screenCenter;
+                float halfWidth = screenWidth / 2f;
+                float halfHeight = screenHeight / 2f;
+
+                float t = float.MaxValue;
+                if (dir.X != 0) t = Math.Min(t, halfWidth / MathF.Abs(dir.X));
+                if (dir.Y != 0) t = Math.Min(t, halfHeight / MathF.Abs(dir.Y));
+                
+                if (t == float.MaxValue) continue; // Should not happen for off-screen players
+
+                arrowPos = screenCenter + dir * t;
+
+                float padding = 20f; // Distance from the edge
+                arrowPos.X = Math.Clamp(arrowPos.X, padding, screenWidth - padding);
+                arrowPos.Y = Math.Clamp(arrowPos.Y, padding, screenHeight - padding);
+
+                _playerArrows.Add((targetPlayer, arrowPos, angle));
+            }
+        }
+
         // Update player animations
         LocalPlayer.Update(dt);
         foreach (var other in Others.Values)
@@ -207,36 +286,75 @@ public class Playing
         }
         HandleCombat();
 
-        // Update camera AFTER all movement (including knockback) to prevent jitter
+        // 1. Update Rotation towards mouse
+        Vector2 mouseWorld = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), Cam.RaylibCamera);
+        Vector2 playerCenter = new Vector2(LocalPlayer.Position.X + 32, LocalPlayer.Position.Y + 32);
+        LocalPlayer.Rotation = (float)(Math.Atan2(mouseWorld.Y - playerCenter.Y, mouseWorld.X - playerCenter.X) * (180.0 / Math.PI));
+        LocalPlayer.HeldItemID = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
+
+        // 2. Camera & Network Sync
         Cam.Update(LocalPlayer.Position, dt);
+        Cam.Zoom = Settings.FOV;
 
-        // Apply FOV setting from Options
-        Cam.Zoom = Settings.FOV; // Assuming CameraManager now has a public 'Zoom' property
-
-        // Network Sync
-        if (LocalPlayer.Position != lastPos)
-        {
-            Program.Net.SendPosition(LocalPlayer.Position.X, LocalPlayer.Position.Y);
-        }
+        // Only send updates if moved or rotated significantly to save bandwidth
+        // but we send it every frame for now to ensure other players see smooth weapon rotation
+        Program.Net.SendPosition(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Rotation);
 
         Hotbar.Update();
         InvMenu.Update();
     }
 
+    private void HandleChatInput()
+    {
+        if (!_isChatting && Raylib.IsKeyPressed(KeyboardKey.Slash))
+        {
+            _isChatting = true;
+            _chatInput = "";
+            return;
+        }
+
+        if (_isChatting)
+        {
+            int key = Raylib.GetCharPressed();
+            while (key > 0)
+            {
+                if (key >= 32 && key <= 125 && _chatInput.Length < 50) _chatInput += (char)key;
+                key = Raylib.GetCharPressed();
+            }
+
+            if (Raylib.IsKeyPressed(KeyboardKey.Backspace) && _chatInput.Length > 0) _chatInput = _chatInput[..^1];
+            if (Raylib.IsKeyPressed(KeyboardKey.Enter))
+            {
+                if (!string.IsNullOrWhiteSpace(_chatInput))
+                    Program.Net.SendChat(_chatInput);
+                _isChatting = false;
+            }
+            if (Raylib.IsKeyPressed(KeyboardKey.Escape)) _isChatting = false;
+        }
+    }
+
     private void HandleMovement(float dt)
     {
         float speed = 350f;
-        if (Raylib.IsKeyDown(KeyboardKey.W)) LocalPlayer.Position.Y -= speed * dt;
-        if (Raylib.IsKeyDown(KeyboardKey.S)) LocalPlayer.Position.Y += speed * dt;
-        if (Raylib.IsKeyDown(KeyboardKey.A)) 
+        Vector2 direction = Vector2.Zero;
+
+        if (Raylib.IsKeyDown(KeyboardKey.W)) direction.Y -= 1;
+        if (Raylib.IsKeyDown(KeyboardKey.S)) direction.Y += 1;
+        if (Raylib.IsKeyDown(KeyboardKey.A))
         {
-            LocalPlayer.Position.X -= speed * dt;
+            direction.X -= 1;
             LocalPlayer.FacingRight = false;
         }
-        if (Raylib.IsKeyDown(KeyboardKey.D)) 
+        if (Raylib.IsKeyDown(KeyboardKey.D))
         {
-            LocalPlayer.Position.X += speed * dt;
+            direction.X += 1;
             LocalPlayer.FacingRight = true;
+        }
+
+        if (direction != Vector2.Zero)
+        {
+            // Normalize ensures that diagonal movement is not faster than cardinal movement
+            LocalPlayer.Position += Vector2.Normalize(direction) * speed * dt;
         }
     }
 
@@ -305,6 +423,8 @@ public class Playing
 
             if (dmg > 0)
             {
+                LocalPlayer.TriggerAttack();
+                
                 Vector2 worldMouse = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), Cam.RaylibCamera);
                 foreach (var other in Others.Values)
                 {
@@ -442,13 +562,114 @@ public class Playing
         Debug.DrawHitbox(LocalPlayer.Position);
         Cam.End();
 
+        // Draw player direction arrows for off-screen targets
+        foreach (var arrow in _playerArrows)
+        {
+            float arrowSize = 25f;
+            Vector2 tip = arrow.screenPos;
+            float rad = arrow.rotation * (MathF.PI / 180f);
+
+            // Calculate base center (position behind the tip)
+            Vector2 baseCenter = new Vector2(
+                tip.X - arrowSize * MathF.Cos(rad),
+                tip.Y - arrowSize * MathF.Sin(rad)
+            );
+
+            // Calculate the two base corners of the triangle
+            Vector2 p2 = new Vector2(
+                baseCenter.X + (arrowSize * 0.5f) * MathF.Cos(rad + MathF.PI / 2f),
+                baseCenter.Y + (arrowSize * 0.5f) * MathF.Sin(rad + MathF.PI / 2f)
+            );
+            Vector2 p3 = new Vector2(
+                baseCenter.X + (arrowSize * 0.5f) * MathF.Cos(rad - MathF.PI / 2f),
+                baseCenter.Y + (arrowSize * 0.5f) * MathF.Sin(rad - MathF.PI / 2f)
+            );
+
+            // Swapped p3 and p2 to ensure Counter-Clockwise winding for proper filling
+            Raylib.DrawTriangle(tip, p3, p2, Color.Blue);
+            Raylib.DrawTriangleLines(tip, p3, p2, new Color(0, 0, 150, 255));
+        }
+
+        DrawChat();
+        if (Raylib.IsKeyDown(KeyboardKey.Tab)) DrawPlayerList();
+
         Hotbar.Draw();
         healthBar.Draw(CurrentHealth, MaxHealth);
+
         
         // UI Visual for Cooldown (Optional, helps testing)
         DrawCooldownUI();
         
         InvMenu.Draw();
+
+        // Render tooltips last so they are on top of everything
+        HotbarUI.RenderTooltip();
+    }
+
+    private void DrawChat()
+    {
+        int sh = Raylib.GetScreenHeight();
+        float currentTime = (float)Raylib.GetTime();
+        int fontSize = 20;
+        int spacing = 22;
+        int anchorY = sh - 80; // The Y-position for the most recent message
+
+        int displayedCount = 0;
+        // Iterate through the log backwards to keep the newest message at the bottom
+        for (int i = _chatLog.Count - 1; i >= 0; i--)
+        {
+            if (displayedCount >= 10) break;
+
+            var entry = _chatLog[i];
+            float age = currentTime - entry.time;
+
+            if (!_isChatting && age > 15.0f) continue;
+
+            // Calculate fade alpha (stays 1.0 until 13s, then fades to 0 over the next 2s)
+            float alpha = 1.0f;
+            if (!_isChatting && age > 13.0f) alpha = 1.0f - ((age - 13.0f) / 2.0f);
+
+            string text = $"[{entry.sender}]: {entry.msg}";
+            int textWidth = Raylib.MeasureText(text, fontSize);
+            int yPos = anchorY - (displayedCount * spacing);
+
+            // Draw Minecraft-style semi-transparent background and text
+            Raylib.DrawRectangle(10, yPos - 2, textWidth + 20, fontSize + 4, new Color((byte)40, (byte)40, (byte)40, (byte)(160 * alpha)));
+            Raylib.DrawText(text, 20, yPos, fontSize, new Color((byte)255, (byte)255, (byte)255, (byte)(255 * alpha)));
+
+            displayedCount++;
+        }
+
+        if (_isChatting)
+        {
+            Raylib.DrawRectangle(10, sh - 45, 500, 35, new Color(0, 0, 0, 180));
+            Raylib.DrawText("> " + _chatInput + "_", 20, sh - 38, 20, Color.Yellow);
+        }
+    }
+
+    private void DrawPlayerList()
+    {
+        var players = Others.Values.ToList();
+        players.Add(LocalPlayer);
+        
+        // Show up to 30 nearest players
+        var sorted = players.OrderBy(p => Vector2.Distance(LocalPlayer.Position, p.Position)).Take(30).ToList();
+
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
+        Raylib.DrawRectangle(sw / 2 - 300, sh / 2 - 200, 600, 380, new Color(0, 0, 0, 200));
+        Raylib.DrawText("ONLINE PLAYERS (Nearest 30)", sw / 2 - 140, sh / 2 - 180, 20, Color.Yellow);
+
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            int col = i / 10;
+            int row = i % 10;
+            int x = sw / 2 - 270 + (col * 200);
+            int y = sh / 2 - 140 + (row * 30);
+            
+            Color nameCol = (sorted[i] == LocalPlayer) ? Color.SkyBlue : Color.White;
+            Raylib.DrawText(sorted[i].Name, x, y, 20, nameCol);
+        }
     }
 
     private void DrawCooldownUI()

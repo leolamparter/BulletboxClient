@@ -81,6 +81,12 @@ public class InventoryUI {
             if (inv.Slots[index].ItemID != ' ') draggingIndex = index;
         }
 
+        // Set tooltip if hovered and not dragging
+        if (isHovered && draggingIndex == -1) {
+            HotbarUI.HoveredStack = inv.Slots[index];
+            HotbarUI.HoveredMousePos = Raylib.GetMousePosition();
+        }
+
         if (draggingIndex != index) {
             HotbarUI.DrawItem(inv.Slots[index], rect);
         }
