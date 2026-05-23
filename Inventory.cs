@@ -19,8 +19,11 @@ public class Inventory {
         for (int i = 0; i < Slots.Length; i++) Slots[i] = new ItemStack((byte)' ', 0);
         
         // TEST DATA: Give us some items to see
-        Slots[0] = new ItemStack((byte)'A', 10);
-        Slots[1] = new ItemStack((byte)'B', 64);
-        Slots[6] = new ItemStack((byte)'C', 1); // First slot of main inv
+        Slots[0] = new ItemStack((byte)'E', 1);
+        Slots[1] = new ItemStack((byte)'R', 1);
+        Slots[2] = new ItemStack((byte)'R', 1);
+        Slots[3] = new ItemStack((byte)'O', 1);
+        Slots[4] = new ItemStack((byte)'R', 1);
+        Slots[5] = new ItemStack((byte)'!', 1);
     }
 }

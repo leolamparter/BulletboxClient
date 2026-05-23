@@ -21,7 +21,7 @@ public class HomeScreen
         // We initialize with dummy positions; Draw() will position them correctly
         buttons.Add(new UIButton("SINGLEPLAYER", Vector2.Zero, 40, true));
         buttons.Add(new UIButton("MULTIPLAYER", Vector2.Zero, 40));
-        buttons.Add(new UIButton("MODS", Vector2.Zero, 40));
+        buttons.Add(new UIButton("FRIENDS", Vector2.Zero, 40));
         buttons.Add(new UIButton("OPTIONS", Vector2.Zero, 40));
         buttons.Add(new UIButton("QUIT GAME", Vector2.Zero, 40));
     }
@@ -41,7 +41,7 @@ public class HomeScreen
                     else 
                         Program.CurrentState = GameState.LOGIN;
                 }
-                if (i == 2) Console.WriteLine("Mods!");
+                if (i == 2) Console.WriteLine("Open Friends List");
                 if (i == 3) {
                     Program.cameFrom = GameState.HOME;
                     Program.CurrentState = GameState.OPTIONS;

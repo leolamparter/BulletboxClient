@@ -474,7 +474,7 @@ public class Playing
             Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, drawColor);
 
             if (_chunkSnapshot.TryGetValue(coord, out byte biome) && biome == 6)
-                Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, new Color(255, 200, 60, 50));
+                Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, new Color(255, 180, 100, 40));
         }
 
         // Feature Pass
@@ -687,14 +687,14 @@ public class Playing
     {
         return biome switch
         {
-            0 => new Color(180, 255, 180, 255), // Meadow
-            1 => new Color(34, 139, 34, 255),  // Forest
-            2 => new Color(255, 220, 60, 255), // Desert
-            3 => new Color(180, 180, 180, 255), // Stony Peaks
-            4 => new Color(20, 40, 120, 255),  // Ocean
-            5 => new Color(255, 240, 160, 255), // Beach
-            6 => new Color(255, 255, 102, 255), // Brimstone Springs
-            7 => new Color(0, 121, 241, 255),   // River
+            0 => new Color(145, 205, 135, 255), // Meadow: Soft, natural pastel green
+            1 => new Color(50, 115, 65, 255),   // Forest: Rich, deep pine/forest green
+            2 => new Color(230, 205, 140, 255), // Desert: Smooth warm sand tone (no neon yellow)
+            3 => new Color(140, 145, 155, 255), // Stony Peaks: Cool slate/stone gray with a hint of blue
+            4 => new Color(45, 80, 145, 255),   // Ocean: Deep but vibrant maritime blue
+            5 => new Color(240, 220, 180, 255), // Beach: Soft warm beige/coastal sand
+            6 => new Color(210, 95, 60, 255),   // Brimstone Springs: Terracotta/burnt sulfur orange instead of neon yellow
+            7 => new Color(75, 150, 210, 255),  // River: Clear, bright river blue that contrasts well against the deep ocean
             _ => Color.Gray
         };
     }
