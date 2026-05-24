@@ -76,6 +76,12 @@ public class HomeScreen
         {
             buttons[i].Position = new Vector2(centerX, startY + (i * spacing));
             buttons[i].Draw();
+            
+            if (buttons[i].Text == "MULTIPLAYER")
+            {
+                int textWidth = Raylib.MeasureText("MULTIPLAYER", 40);
+                Raylib.DrawText("(EXPERIMENTAL)", (int)centerX + (textWidth / 2) + 10, (int)buttons[i].Position.Y - 5, 15, Color.Gray);
+            }
         }
     }
 }

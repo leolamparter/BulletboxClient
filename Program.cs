@@ -96,7 +96,8 @@ class Program
                     // Only initiate a connection if we aren't already connected (e.g. coming from Home -> Multiplayer)
                     if (!Net.IsConnected())
                     {
-                        Net.Connect("bore.pub", 43542, CurrentUser.Username, CurrentUser.Password);
+                        // Net.Connect("bore.pub", 43542, CurrentUser.Username, CurrentUser.Password);
+                        Net.Connect("127.0.0.1", 32308, CurrentUser.Username, CurrentUser.Password);
                     }
 
                     // Always update playing state so networking/health packets process

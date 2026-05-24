@@ -14,6 +14,8 @@ public class Player
     public float Rotation = 0f;
     public byte HeldItemID = 0;
     public float AttackAnimProgress = 0f;
+    public bool IsBlocking = false;
+    public byte OffHandItemID = 0;
 
     private float _rotation = 0f;
     private const float _rotationSpeed = 150f; // Degrees per second
@@ -142,10 +144,33 @@ public class Player
             Raylib.DrawTexturePro(weaponTex, src, wDest, origin, visualRotation, Color.White);
         }
 
+        void DrawOffhand()
+        {
+            if (OffHandItemID != (byte)'H') return; // 'H' for Shield
+            Texture2D shieldTex = AssetManager.GetTexture("shield");
+            if (shieldTex.Id == 0) return;
+
+            float scale = IsBlocking ? 1.0f : 0.65f;
+            float radius = IsBlocking ? 30f : 22f;
+            // If blocking, shield is in front. If not, it's tucked to the side (-60 deg offset)
+            float visualRotation = IsBlocking ? Rotation : Rotation - 60f;
+
+            float rad = visualRotation * (MathF.PI / 180f);
+            Vector2 shieldPos = new Vector2(
+                center.X + MathF.Cos(rad) * radius,
+                center.Y + MathF.Sin(rad) * radius
+            );
+
+            Rectangle src = new Rectangle(0, 0, shieldTex.Width, shieldTex.Height);
+            Rectangle dest = new Rectangle(shieldPos.X, shieldPos.Y, shieldTex.Width * scale, shieldTex.Height * scale);
+            Vector2 origin = new Vector2((shieldTex.Width * scale) / 2, (shieldTex.Height * scale) / 2);
+            Raylib.DrawTexturePro(shieldTex, src, dest, origin, visualRotation, Color.White);
+        }
+
         // 3. Execution Pass
-        if (weaponBehind) DrawWeapon();
+        if (weaponBehind) { DrawWeapon(); DrawOffhand(); }
         Raylib.DrawTexturePro(_pixelTarget.Texture, source, dest, destOrigin, 0f, Color.White);
-        if (!weaponBehind) DrawWeapon();
+        if (!weaponBehind) { DrawWeapon(); DrawOffhand(); }
 
         // 3. Draw Name Tag
         int textWidth = Raylib.MeasureText(Name, 20);

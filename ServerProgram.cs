@@ -166,8 +166,15 @@ public class ServerProgram
                 foreach (var p in ConnectedPlayers) {
                     try {
                         lock (p.WriterLock) {
-                            p.Writer.Write((byte)1); p.Writer.Write(bot.Name); p.Writer.Write(bot.Position.X);
-                            p.Writer.Write(bot.Position.Y); p.Writer.Write(bot.Rotation); p.Writer.Write(bot.HeldItemID); p.Writer.Flush();
+                            p.Writer.Write((byte)1); 
+                            p.Writer.Write(bot.Name); 
+                            p.Writer.Write(bot.Position.X);
+                            p.Writer.Write(bot.Position.Y); 
+                            p.Writer.Write(bot.Rotation); 
+                            p.Writer.Write(bot.HeldItemID); 
+                            p.Writer.Write((byte)'\0'); // Bots have no offhand
+                            p.Writer.Write(false);      // Bots don't block yet
+                            p.Writer.Flush();
                         }
                     } catch { }
                 }

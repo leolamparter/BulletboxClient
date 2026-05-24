@@ -18,6 +18,7 @@ public class ServerPlayer
     public int Health = 100;
     public int MaxHealth = 100;
     public float Rotation = 0f;
+    public bool IsBlocking = false;
 
     private TcpClient _client;
     private NetworkStream _stream;
@@ -30,7 +31,7 @@ public class ServerPlayer
     public readonly object WriterLock = new();
 
     // The Server's source of truth
-    public ServerItemStack[] Inventory = new ServerItemStack[24];
+    public ServerItemStack[] Inventory = new ServerItemStack[25];
 
     public ServerPlayer(TcpClient client)
     {
@@ -40,7 +41,7 @@ public class ServerPlayer
         Writer = new BinaryWriter(_stream);
 
         // Initialize empty
-        for (int i = 0; i < 24; i++) Inventory[i] = new ServerItemStack((byte)' ', 0);
+        for (int i = 0; i < 25; i++) Inventory[i] = new ServerItemStack((byte)' ', 0);
     }
 
     public async Task Listen(ServerWorld world)
@@ -59,6 +60,9 @@ public class ServerPlayer
                     
                     world.UpdatePosition(Username, 400, 300);
                     
+                    // Give a shield by default for testing
+                    Inventory[24] = new ServerItemStack((byte)'H', 1);
+
                     Inventory[0] = new ServerItemStack((byte)'S', 1); // Sword
                     Inventory[1] = new ServerItemStack((byte)'A', 1); // Axe
                     Inventory[2] = new ServerItemStack((byte)'D', 1); // Dagger
@@ -81,7 +85,7 @@ public class ServerPlayer
                     float y = _reader.ReadSingle();
                     Rotation = _reader.ReadSingle();
                     world.UpdatePosition(Username, x, y);
-                    BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID);
+                    BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking);
                 }
                 else if (packetId == 2) // Slot Selection
                 {
@@ -93,7 +97,7 @@ public class ServerPlayer
                     byte from = _reader.ReadByte();
                     byte to = _reader.ReadByte();
                     
-                    if (from < 24 && to < 24)
+                    if (from < 25 && to < 25)
                     {
                         // Swap items in server memory
                         ServerItemStack temp = Inventory[from];
@@ -116,6 +120,10 @@ public class ServerPlayer
                         Writer.Write((byte)chunk.Feature);
                         Writer.Flush();
                     }
+                }
+                else if (packetId == 12) // Blocking State
+                {
+                    IsBlocking = _reader.ReadBoolean();
                 }
                 else if (packetId == 6) {
                     string victimName = _reader.ReadString();
@@ -194,7 +202,7 @@ public class ServerPlayer
         lock (WriterLock)
         {
             Writer.Write((byte)4); 
-            for (int i = 0; i < 24; i++) {
+            for (int i = 0; i < 25; i++) {
                 Writer.Write(Inventory[i].ItemID);
                 Writer.Write(Inventory[i].Count);
             }
@@ -202,7 +210,7 @@ public class ServerPlayer
         }
     }
 
-    private void BroadcastMove(string name, float x, float y, float rot, byte heldItemId)
+    private void BroadcastMove(string name, float x, float y, float rot, byte heldItemId, byte offHandId, bool blocking)
     {
         List<ServerPlayer> playersToNotify;
         lock (ServerProgram.ConnectedPlayers)
@@ -222,6 +230,9 @@ public class ServerPlayer
                     p.Writer.Write(y);
                     p.Writer.Write(rot);
                     p.Writer.Write(heldItemId);
+                    // Add offhand data to movement broadcast so others can see it
+                    p.Writer.Write(offHandId);
+                    p.Writer.Write(blocking);
                     p.Writer.Flush();
                 }
             } catch { }
@@ -264,6 +275,7 @@ public class ServerPlayer
 
     public void Damage(int amount) 
     {
+        if (IsBlocking) amount = (int)(amount * 0.15f); // 85% reduction
         Health -= amount;
         if (Health < 0) Health = 0;
         SyncHealth();

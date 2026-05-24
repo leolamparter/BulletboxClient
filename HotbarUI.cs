@@ -32,6 +32,23 @@ public class HotbarUI {
         float startX = (float)Math.Floor((sw - totalW) / 2f);
         float y = (float)Math.Floor(sh - size - 20f);
 
+        // --- Draw Off-hand Slot (Shield) ---
+        float offhandX = startX - size - 20;
+        Rectangle offRect = new Rectangle(offhandX, y, size, size);
+        Texture2D offTex = AssetManager.GetTexture("hotbar_deactive");
+        if (offTex.Id != 0) {
+            Raylib.DrawTexturePro(offTex, new Rectangle(0, 0, offTex.Width, offTex.Height), offRect, Vector2.Zero, 0f, Color.White);
+        }
+        
+        // Draw Item in Off-hand (Slot 24)
+        DrawItem(inv.Slots[24], offRect);
+
+        if (Raylib.CheckCollisionPointRec(Raylib.GetMousePosition(), offRect) && !Program.IsPaused) {
+            HoveredStack = inv.Slots[24];
+            HoveredMousePos = Raylib.GetMousePosition();
+        }
+
+        // --- Draw Standard Hotbar ---
         for (int i = 0; i < 6; i++) {
             Rectangle rect = new Rectangle(startX + (i * (size + pad)), y, size, size);
 
@@ -95,13 +112,15 @@ public class HotbarUI {
 
     public static void DrawItem(ItemStack stack, Rectangle rect) {
         if (((char)stack.ItemID) != ' ' && ((char)stack.ItemID) != '\0') {
-            string id = ((char)stack.ItemID).ToString();
+            char idChar = (char)stack.ItemID;
+            string id = idChar.ToString();
             
             string textureKey = "";
-            if (stack.ItemID == (byte)'K') textureKey = "kanabo";
-            else if (stack.ItemID == (byte)'P') textureKey = "spear";
-            else if (stack.ItemID == (byte)'S') textureKey = "sword";
-
+            if (idChar == 'K') textureKey = "kanabo";
+            else if (idChar == 'P') textureKey = "spear";
+            else if (idChar == 'S') textureKey = "sword";
+            else if (idChar == 'H') textureKey = "shield";
+            
             Texture2D itemTex = string.IsNullOrEmpty(textureKey) ? new Texture2D() : AssetManager.GetTexture(textureKey);
 
             if (itemTex.Id != 0) {

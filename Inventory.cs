@@ -12,11 +12,11 @@ public struct ItemStack {
 // Inventory.cs
 public class Inventory {
     // 6 slots (Hotbar) + 18 slots (3 rows of 6) = 24 total
-    public ItemStack[] Slots = new ItemStack[24];
+    public ItemStack[] Slots = new ItemStack[25]; // 24 standard + 1 Off-hand
 
     public Inventory() {
         // Initialize with empty slots
-        for (int i = 0; i < Slots.Length; i++) Slots[i] = new ItemStack((byte)' ', 0);
+        for (int i = 0; i < Slots.Length; i++) Slots[i] = new ItemStack((byte)'\0', 0);
         
         // TEST DATA: Give us some items to see
         Slots[0] = new ItemStack((byte)'E', 1);

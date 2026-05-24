@@ -91,6 +91,8 @@ public class Connection
                     float y = _reader.ReadSingle();
                     float rot = _reader.ReadSingle();
                     byte heldId = _reader.ReadByte();
+                    byte offHandId = _reader.ReadByte();
+                    bool isBlocking = _reader.ReadBoolean();
 
                     // Safety check: Don't process if the game state changed
                     if (Program.PlayingState != null)
@@ -101,6 +103,8 @@ public class Connection
                             Program.PlayingState.Others[name].Position = new Vector2(x, y);
                             Program.PlayingState.Others[name].Rotation = rot;
                             Program.PlayingState.Others[name].HeldItemID = heldId;
+                            Program.PlayingState.Others[name].OffHandItemID = offHandId;
+                            Program.PlayingState.Others[name].IsBlocking = isBlocking;
                         }
                         // If it's a new player (and not us), add them to the world
                         else if (name != Program.CurrentUser.Username)
@@ -111,6 +115,8 @@ public class Connection
                             newRemotePlayer.Color = Raylib_cs.Color.White; // Remote players are white
                             newRemotePlayer.Rotation = rot;
                             newRemotePlayer.HeldItemID = heldId;
+                            newRemotePlayer.OffHandItemID = offHandId;
+                            newRemotePlayer.IsBlocking = isBlocking;
                             
                             Program.PlayingState.Others[name] = newRemotePlayer;
                         }
@@ -118,7 +124,7 @@ public class Connection
                 }
                 else if (packetId == 4) 
                 {
-                    for (int i = 0; i < 24; i++)
+                    for (int i = 0; i < 25; i++)
                     {
                         byte id = _reader.ReadByte(); // Read 1 byte to match the server
                         int count = _reader.ReadInt32();
@@ -250,6 +256,16 @@ public class Connection
             _writer.Flush();
         }
         catch { _isConnected = false; }
+    }
+
+    public void SendBlockingState(bool isBlocking)
+    {
+        if (!_isConnected || _writer == null) return;
+        try {
+            _writer.Write((byte)12); // Packet ID 12: Blocking State
+            _writer.Write(isBlocking);
+            _writer.Flush();
+        } catch { _isConnected = false; }
     }
 
     public void SendChat(string message)

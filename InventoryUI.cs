@@ -19,6 +19,12 @@ public class InventoryUI {
         if (Raylib.IsMouseButtonReleased(MouseButton.Left) && draggingIndex != -1) {
             int dropTarget = GetSlotUnderMouse();
             if (dropTarget != -1 && dropTarget != draggingIndex) {
+                // Enforce Shield-only rule for slot 24
+                if (dropTarget == 24 && (char)inv.Slots[draggingIndex].ItemID != 'H') {
+                    draggingIndex = -1;
+                    return;
+                }
+                
                 Program.Net.SendMoveItem((byte)draggingIndex, (byte)dropTarget);
             }
             draggingIndex = -1;
@@ -43,6 +49,10 @@ public class InventoryUI {
             int col = (i - 6) % 6;
             DrawSlotLogic(startX + (col * (size + pad)), startY + (row * (size + pad)), i, size);
         }
+
+        // Off-hand Slot (24)
+        float offX = startX - size - 20;
+        DrawSlotLogic(offX, hotY, 24, size);
 
         // Hotbar Slots (0-5) - Shown while inventory is open for easy moving
         for (int i = 0; i < 6; i++) {
@@ -101,6 +111,10 @@ public class InventoryUI {
         float hotY = (float)Math.Floor(sh - size - 20f);
         Vector2 mouse = Raylib.GetMousePosition();
 
+        // Check Off-hand
+        if (Raylib.CheckCollisionPointRec(mouse, new Rectangle(startX - size - 20, hotY, size, size))) return 24;
+
+        // Check Hotbar
         for (int i = 0; i < 6; i++) {
             if (Raylib.CheckCollisionPointRec(mouse, new Rectangle(startX + (i * (size + pad)), hotY, size, size))) return i;
         }

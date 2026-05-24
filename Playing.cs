@@ -3,6 +3,7 @@ using Raylib_cs;
 using System.Numerics;
 using System.Collections.Generic;
 using System; // For Console
+using System.Linq;
 using BulletboxClient; // Added to access Settings and OptionsScreen
 
 // Duplicated from server for client-side rendering logic
@@ -51,7 +52,6 @@ public class Playing
     // Combat Timers
     private float _cAttackTimer = 0f; 
     private float _cHitTimer = 10f;   
-    private bool _isBlocking = false;
     private int _selectedHotbarIndex = 0;
     private Vector2 _kbVelocity = Vector2.Zero;
     
@@ -129,6 +129,15 @@ public class Playing
         // Update Timers every frame
         _cAttackTimer += dt;
         _cHitTimer += dt;
+
+        // Update Blocking State
+        bool wasBlocking = LocalPlayer.IsBlocking;
+        LocalPlayer.OffHandItemID = PlayerInventory.Slots[24].ItemID;
+        LocalPlayer.IsBlocking = Raylib.IsMouseButtonDown(MouseButton.Right) && LocalPlayer.OffHandItemID == (byte)'H';
+        
+        if (LocalPlayer.IsBlocking != wasBlocking) {
+            Program.Net.SendBlockingState(LocalPlayer.IsBlocking);
+        }
 
         // Handle Debug inputs
         Debug.Update();
@@ -234,7 +243,7 @@ public class Playing
 
         // Find nearest two players and prepare arrow data
         List<(Player player, float distance)> sortedOthers = new();
-        foreach (var other in Others.Values)
+        foreach (var other in Others.Values.ToList())
         {
             float dist = Vector2.Distance(LocalPlayer.Position, other.Position);
             sortedOthers.Add((other, dist));
@@ -343,7 +352,7 @@ public class Playing
     private void HandleMovement(float dt)
     {
         float baseSpeed = 350f;
-        if (_isBlocking) baseSpeed *= 0.8f; // 20% slow down while blocking
+        if (LocalPlayer.IsBlocking) baseSpeed *= 0.8f; // 20% slow down while blocking
 
         Vector2 direction = Vector2.Zero;
 
@@ -435,7 +444,7 @@ public class Playing
                 LocalPlayer.TriggerAttack();
                 
                 Vector2 worldMouse = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), Cam.RaylibCamera);
-                foreach (var other in Others.Values)
+                foreach (var other in Others.Values.ToList())
                 {
                     Rectangle hitBox = new Rectangle(other.Position.X, other.Position.Y, 64, 64);
                     float dist = Vector2.Distance(LocalPlayer.Position, other.Position);
@@ -562,7 +571,7 @@ public class Playing
             }
         }
 
-        foreach (var other in Others.Values) 
+        foreach (var other in Others.Values.ToList()) 
         {   
             other.Draw(); // Draw other players
             Debug.DrawHitbox(other.Position);
