@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Bulletbox")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2b0973cd0f8a5de9b152e7c132508e3202f8d3c7")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+10da64204b1a0b4015b678944b0b736ff0c1fc84")]
 [assembly: System.Reflection.AssemblyProductAttribute("Bulletbox")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Bulletbox")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

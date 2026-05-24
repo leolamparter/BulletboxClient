@@ -56,9 +56,16 @@ public class ServerWorld
     // Store player positions for proximity checks and movement sync
     public Dictionary<string, Vector2> PlayerLocations = new();
 
+    public int Seed;
+
     // Cache for generated world data
     private Dictionary<(int, int), ServerChunk> _chunks = new();
     private readonly object _worldLock = new();
+
+    public ServerWorld()
+    {
+        Seed = new Random().Next(-1000000, 1000000);
+    }
 
     public void UpdatePosition(string username, float x, float y)
     {
@@ -83,14 +90,18 @@ public class ServerWorld
             if (_chunks.TryGetValue((chunkX, chunkY), out var chunk))
                 return chunk;
 
+            // Apply the seed as a coordinate offset to "shift" the noise map
+            float sx = chunkX + (Seed % 5000); 
+            float sy = chunkY + (Seed / 5000);
+
             // Dedicated low-frequency noise for rare but massive oceans
-            float oceanNoise = (Perlin.Noise(chunkX * 0.003f, chunkY * 0.003f) + 1f) * 0.5f;
+            float oceanNoise = (Perlin.Noise(sx * 0.003f, sy * 0.003f) + 1f) * 0.5f;
             float scale = 0.008f;
-            float riverNoise = Perlin.Noise(chunkX * 0.025f, chunkY * 0.025f);
-            float noise = Perlin.Noise(chunkX * scale, chunkY * scale);
-            float noise2 = Perlin.Noise(chunkX * scale * 0.5f + 1000, chunkY * scale * 0.5f - 1000) * 0.5f;
+            float riverNoise = Perlin.Noise(sx * 0.025f, sy * 0.025f);
+            float noise = Perlin.Noise(sx * scale, sy * scale);
+            float noise2 = Perlin.Noise(sx * scale * 0.5f + 1000, sy * scale * 0.5f - 1000) * 0.5f;
             float n = (noise + noise2 + 1f) * 0.5f;
-            float landNoise = Perlin.Noise(chunkX * 0.018f + 5000, chunkY * 0.018f - 5000);
+            float landNoise = Perlin.Noise(sx * 0.018f + 5000, sy * 0.018f - 5000);
             float landN = (landNoise + 1f) * 0.5f;
 
             BiomeType biome;
@@ -115,7 +126,7 @@ public class ServerWorld
             chunk = new ServerChunk(chunkX, chunkY, biome);
             
             // Feature Generation (Reduced density to prevent "piling")
-            int fHash = (chunkX * 73856093) ^ (chunkY * 19349663);
+            int fHash = (chunkX * 73856093) ^ (chunkY * 19349663) ^ Seed;
             int roll = Math.Abs(fHash) % 1000; // Switch to 1000 for finer control
 
             if (biome == BiomeType.Forest)
