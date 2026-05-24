@@ -164,7 +164,7 @@ public class Player
             Rectangle src = new Rectangle(0, 0, shieldTex.Width, shieldTex.Height);
             Rectangle dest = new Rectangle(shieldPos.X, shieldPos.Y, shieldTex.Width * scale, shieldTex.Height * scale);
             Vector2 origin = new Vector2((shieldTex.Width * scale) / 2, (shieldTex.Height * scale) / 2);
-            Raylib.DrawTexturePro(shieldTex, src, dest, origin, visualRotation, Color.White);
+            Raylib.DrawTexturePro(shieldTex, src, dest, origin, visualRotation + 90f, Color.White);
         }
 
         // 3. Execution Pass

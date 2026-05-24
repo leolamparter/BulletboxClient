@@ -1,6 +1,7 @@
-﻿﻿using Raylib_cs;
+﻿﻿﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
+using System.IO;
 using BulletboxClient;
 using DiscordRPC;
 
@@ -21,6 +22,55 @@ class Program
 
     static void Main()
     {
+        // Use ProcessPath to find the real location of the binary on disk.
+        string searchPath = Path.GetDirectoryName(Environment.ProcessPath);
+        string initialSearchPath = searchPath;
+        string finalWorkingDir = null;
+        
+        Console.WriteLine($"[Core] Initial ProcessPath Dir: {initialSearchPath}");
+
+        // Walk up the directory tree to find the correct base for resources
+        while (searchPath != null)
+        {
+            Console.WriteLine($"[Core] Checking path: {searchPath}");
+
+            // Check for 'resources' directly in the current path (common for dev builds or non-macOS)
+            string directResourcesPath = Path.Combine(searchPath, "resources");
+            if (Directory.Exists(directResourcesPath))
+            {
+                finalWorkingDir = searchPath;
+                Console.WriteLine($"[Core] Found 'resources' directly in: {finalWorkingDir}");
+                break;
+            }
+
+            // macOS Bundle Check: Contents/Resources/resources
+            // If currentSearchPath is Contents/MacOS, parentDir is Contents
+            string parentDir = Path.GetDirectoryName(searchPath);
+            if (parentDir != null)
+            {
+                string macResourcesFolder = Path.Combine(parentDir, "Resources"); // This would be Contents/Resources
+                string macBundleResourcesPath = Path.Combine(macResourcesFolder, "resources"); // This would be Contents/Resources/resources
+                Console.WriteLine($"[Core] Checking macOS bundle path: {macBundleResourcesPath}");
+                if (Directory.Exists(macBundleResourcesPath))
+                {
+                    finalWorkingDir = macResourcesFolder; // Set working dir to Contents/Resources
+                    Console.WriteLine($"[Core] Found 'resources' in macOS bundle structure: {finalWorkingDir}");
+                    break;
+                }
+            }
+            searchPath = parentDir; // Move up one level
+        }
+
+        if (finalWorkingDir != null) 
+        {
+            Directory.SetCurrentDirectory(finalWorkingDir);
+            Console.WriteLine($"[Core] Working Directory set to: {Directory.GetCurrentDirectory()}");
+        }
+        else
+        {
+            Console.WriteLine("[Core] CRITICAL ERROR: Could not find 'resources' folder!");
+        }
+
         Raylib.SetConfigFlags(ConfigFlags.ResizableWindow);
         Raylib.InitWindow(800, 480, "Bulletbox | C# Edition");
         Raylib.SetTargetFPS(60);

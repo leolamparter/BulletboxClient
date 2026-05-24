@@ -1,3 +1,0 @@
-/Users/Movies/Bulletbox/bin/Release/net10.0/osx-x64/publish/Bulletbox.pdb
-/Users/Movies/Bulletbox/bin/Release/net10.0/osx-x64/publish/libraylib.dylib
-/Users/Movies/Bulletbox/bin/Release/net10.0/osx-x64/publish/Bulletbox
