@@ -51,12 +51,34 @@ public class ServerChunk
     }
 }
 
+public class RaiderBot
+{
+    public string Name;
+    public Vector2 Position;
+    public Vector2 Velocity = Vector2.Zero;
+    public int Health = 100;
+    public int MaxHealth = 100;
+    public float Rotation;
+    public float AttackTimer;
+    public byte HeldItemID = (byte)'S';
+    public float AttackCooldown = 0.425f;
+    public float FleeTimer = 0f;
+    public Vector2? WanderTarget = null;
+    public float WanderWaitTimer = 0f;
+    public RaiderBot(string name, Vector2 pos) { Name = name; Position = pos; }
+}
+
 public class ServerWorld
 {
     // Store player positions for proximity checks and movement sync
     public Dictionary<string, Vector2> PlayerLocations = new();
 
     public int Seed;
+
+    // Raid State
+    public float RaidTimer = 30f;
+    public bool RaidActive = false;
+    public List<RaiderBot> Raiders = new();
 
     // Cache for generated world data
     private Dictionary<(int, int), ServerChunk> _chunks = new();

@@ -38,7 +38,7 @@ public class Playing
     public HotbarUI Hotbar;
     public InventoryUI InvMenu;
     private HealthBar healthBar = new HealthBar();
-    
+
     // Optimization Caches
     private Dictionary<(int, int), byte> _chunkSnapshot = new();
     private Dictionary<(int, int), byte> _featureSnapshot = new();
@@ -51,6 +51,7 @@ public class Playing
     // Combat Timers
     private float _cAttackTimer = 0f; 
     private float _cHitTimer = 10f;   
+    private bool _isBlocking = false;
     private int _selectedHotbarIndex = 0;
     private Vector2 _kbVelocity = Vector2.Zero;
     
@@ -60,6 +61,11 @@ public class Playing
     private List<(string sender, string msg, float time)> _chatLog = new();
 
     private List<(Player player, Vector2 screenPos, float rotation)> _playerArrows = new();
+
+    // Raid UI State
+    public bool RaidActive = false;
+    public float RaidTimer = 0f;
+    public float RaidBossHealth = 0f;
 
     public Playing(string myName)
     {
@@ -96,6 +102,7 @@ public class Playing
         AssetManager.LoadTexture("kanabo", "resources/textures/item/kanabo.png");
         AssetManager.LoadTexture("spear", "resources/textures/item/spear.png");
         AssetManager.LoadTexture("sword", "resources/textures/item/sword.png");
+        AssetManager.LoadTexture("shield", "resources/textures/item/shield.png");
 
         if (AssetManager.GetTexture("hotbar_active").Id == 0) Console.WriteLine("ERROR: 'hotbar_active' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_active.png");
         if (AssetManager.GetTexture("hotbar_deactive").Id == 0) Console.WriteLine("ERROR: 'hotbar_deactive' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_deactive.png");
@@ -335,7 +342,9 @@ public class Playing
 
     private void HandleMovement(float dt)
     {
-        float speed = 350f;
+        float baseSpeed = 350f;
+        if (_isBlocking) baseSpeed *= 0.8f; // 20% slow down while blocking
+
         Vector2 direction = Vector2.Zero;
 
         if (Raylib.IsKeyDown(KeyboardKey.W)) direction.Y -= 1;
@@ -354,7 +363,7 @@ public class Playing
         if (direction != Vector2.Zero)
         {
             // Normalize ensures that diagonal movement is not faster than cardinal movement
-            LocalPlayer.Position += Vector2.Normalize(direction) * speed * dt;
+            LocalPlayer.Position += Vector2.Normalize(direction) * baseSpeed * dt;
         }
     }
 
@@ -591,10 +600,35 @@ public class Playing
         }
 
         DrawChat();
+
+        // Draw Off-hand Shield Slot
+        int swUI = Raylib.GetScreenWidth();
+        int shUI = Raylib.GetScreenHeight();
+        int offHandX = swUI / 2 - 270; // Positioned to the left of the hotbar
+        int offHandY = shUI - 72;
+        
+        Raylib.DrawTexture(AssetManager.GetTexture("hotbar_deactive"), offHandX, offHandY, Color.White);
+
         if (Raylib.IsKeyDown(KeyboardKey.Tab)) DrawPlayerList();
 
         Hotbar.Draw();
         healthBar.Draw(CurrentHealth, MaxHealth);
+
+        
+        // Draw Raid UI
+        int sw = Raylib.GetScreenWidth();
+        if (!RaidActive) {
+            string timerText = $"Next Raid: {(int)RaidTimer}s";
+            int tw = Raylib.MeasureText(timerText, 25);
+            Raylib.DrawText(timerText, sw / 2 - tw / 2, 20, 25, Color.White);
+        } else {
+            int barW = 400, barH = 20;
+            int x = sw / 2 - barW / 2;
+            Raylib.DrawText("RAID", sw / 2 - 20, 15, 20, new Color(255, 60, 0, 255));
+            Raylib.DrawRectangle(x, 40, barW, barH, new Color(50, 20, 20, 200));
+            Raylib.DrawRectangle(x, 40, (int)(barW * RaidBossHealth), barH, new Color(255, 80, 0, 255));
+            Raylib.DrawRectangleLines(x, 40, barW, barH, Color.Black);
+        }
 
         
         // UI Visual for Cooldown (Optional, helps testing)

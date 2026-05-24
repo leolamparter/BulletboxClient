@@ -65,11 +65,13 @@ public class Player
             float canvasScale = 24f / 96f;
             Vector2 texCenter = new Vector2(12, 12);
             Rectangle templateSource = new Rectangle(0, 0, 64, -64);
+            
+            bool isRaider = Name.StartsWith("Raider");
 
             // Outer Square (CCW)
             Rectangle outerDest = new Rectangle(texCenter.X, texCenter.Y, 64 * canvasScale, 64 * canvasScale);
             Vector2 outerOrigin = new Vector2(32 * canvasScale, 32 * canvasScale);
-            Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, outerDest, outerOrigin, -_rotation, Color.DarkGreen);
+            Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, outerDest, outerOrigin, -_rotation, isRaider ? Color.Red : Color.DarkGreen);
 
             // Inner Square (CW)
             float innerSize = 64 * 0.55f * canvasScale;

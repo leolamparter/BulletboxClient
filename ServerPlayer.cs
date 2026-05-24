@@ -137,11 +137,10 @@ public class ServerPlayer
                             Vector2 myPos = world.PlayerLocations[this.Username];
                             Vector2 victimPos = world.PlayerLocations[victim.Username];
                             float dist = Vector2.Distance(myPos, victimPos);
-
+                            
                             if (dist <= range) {
                                 _lastAttackTime = DateTime.Now; 
                                 _lastHitTime = DateTime.Now;   
-                                
                                 victim.Damage((int)dmg);
 
                                 if (Math.Abs(kb) > 0.1f) {
@@ -155,9 +154,28 @@ public class ServerPlayer
                                     }
                                 }
                             }
+                        } else {
+                            var bot = world.Raiders.Find(b => b.Name == victimName);
+                            if (bot != null && Vector2.Distance(world.PlayerLocations[this.Username], bot.Position) <= range) {
+                                _lastAttackTime = DateTime.Now;
+                                _lastHitTime = DateTime.Now;
+                                bot.Health -= (int)dmg;
+
+                                if (Math.Abs(kb) > 0.1f) {
+                                    Vector2 dir = Vector2.Normalize(bot.Position - world.PlayerLocations[this.Username]);
+                                    bot.Velocity += dir * kb * 15f; // Turn 'distance' into 'velocity'
+                                }
+
+                                if (bot.Health <= 0) {
+                                    world.Raiders.Remove(bot);
+                                    // Notify all clients to remove this bot from their screens
+                                    lock (ServerProgram.ConnectedPlayers) {
+                                        foreach (var p in ServerProgram.ConnectedPlayers) p.SendLeaveSignal(bot.Name);
+                                    }
+                                }
+                            }
                         }
-                    }
-                    else {
+                    } else {
                         _lastAttackTime = DateTime.Now;
                     }
                 }

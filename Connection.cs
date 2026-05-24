@@ -173,6 +173,16 @@ public class Connection
                         Console.WriteLine($"Player {name} left the world.");
                     }
                 }
+                else if (packetId == 11) // Raid Update
+                {
+                    byte type = _reader.ReadByte();
+                    float val = _reader.ReadSingle();
+                    if (Program.PlayingState != null) {
+                        Program.PlayingState.RaidActive = type == 1;
+                        if (type == 0) Program.PlayingState.RaidTimer = val;
+                        else Program.PlayingState.RaidBossHealth = val;
+                    }
+                }
             }
         }
         catch (EndOfStreamException)
