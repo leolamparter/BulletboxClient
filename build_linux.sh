@@ -16,13 +16,20 @@ dotnet publish -r "$RUNTIME" -c Release -f net10.0 -p:PublishSingleFile=true -p:
 # 2. Package
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
-cp "$PUBLISH_DIR/Bulletbox" "$BUILD_DIR/Bulletbox"
+
+# CRITICAL FIX: Copy EVERYTHING from the publish folder (Grabs libraylib.so, libdiscord-rpc.so, etc.)
+cp -r "$PUBLISH_DIR/"* "$BUILD_DIR/"
+
+# Ensure the executable has launch permissions
 chmod +x "$BUILD_DIR/Bulletbox"
+
+# Copy assets
 cp -r "$ROOT_DIR/resources" "$BUILD_DIR/" 2>/dev/null || cp -r resources "$BUILD_DIR/" 2>/dev/null || :
 cp -r "$ROOT_DIR/fonts" "$BUILD_DIR/" 2>/dev/null || cp -r fonts "$BUILD_DIR/" 2>/dev/null || :
 cp -r "$ROOT_DIR/img" "$BUILD_DIR/" 2>/dev/null || cp -r img "$BUILD_DIR/" 2>/dev/null || :
 
 echo "📦 Compressing for Linux..."
+rm -f "$APP_NAME.tar.gz"
 tar -czf "$APP_NAME.tar.gz" "$BUILD_DIR"
 
 # Cleanup

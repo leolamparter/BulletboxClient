@@ -28,6 +28,12 @@ if [ -f "$APP_NAME.app/Contents/MacOS/$EXECUTABLE_NAME" ] && [ "$EXECUTABLE_NAME
 fi
 chmod +x "$APP_NAME.app/Contents/MacOS/$APP_NAME"
 
+# 4. CRITICAL FIX: Ad-hoc sign the executable and native .dylib files
+# Without this, Apple Silicon will refuse to execute the binary and crash immediately.
+echo "🔐 Ad-hoc signing binaries for Apple Silicon..."
+find "$APP_NAME.app/Contents/MacOS" -type f \( -name "$APP_NAME" -o -name "*.dylib" \) -exec codesign --force --deep --sign - {} \;
+
+# 5. Copy Assets
 cp -r "$ROOT_DIR/fonts" "$APP_NAME.app/Contents/Resources/" 2>/dev/null || cp -r fonts "$APP_NAME.app/Contents/Resources/" 2>/dev/null || :
 cp -r "$ROOT_DIR/img" "$APP_NAME.app/Contents/Resources/" 2>/dev/null || cp -r img "$APP_NAME.app/Contents/Resources/" 2>/dev/null || :
 
@@ -41,7 +47,7 @@ fi
 
 cp "$ROOT_DIR/icons.icns" "$APP_NAME.app/Contents/Resources/" 2>/dev/null || cp icons.icns "$APP_NAME.app/Contents/Resources/" 2>/dev/null || :
 
-# 4. Create Info.plist
+# 6. Create Info.plist
 cat > "$APP_NAME.app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -72,7 +78,11 @@ rm -rf "dmg_root_silicon"
 mkdir -p "dmg_root_silicon"
 
 cp -R "$APP_NAME.app" "dmg_root_silicon/"
+
+# Stripping Mac metadata (.DS_Store files, etc.) so it's a completely clean package
 xattr -rc "dmg_root_silicon"
+find "dmg_root_silicon" -name ".DS_Store" -depth -exec rm {} \; 2>/dev/null || :
+
 ln -s /Applications "dmg_root_silicon/Applications"
 
 # Staging method to bypass "No space left on device" bug
