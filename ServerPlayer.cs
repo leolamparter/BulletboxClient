@@ -19,6 +19,7 @@ public class ServerPlayer
     public int MaxHealth = 100;
     public float Rotation = 0f;
     public bool IsBlocking = false;
+    public int ViewRadius = 40;
 
     private TcpClient _client;
     private NetworkStream _stream;
@@ -85,7 +86,7 @@ public class ServerPlayer
                     float y = _reader.ReadSingle();
                     Rotation = _reader.ReadSingle();
                     world.UpdatePosition(Username, x, y);
-                    BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking);
+                    BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking, Health, MaxHealth);
                 }
                 else if (packetId == 2) // Slot Selection
                 {
@@ -124,6 +125,10 @@ public class ServerPlayer
                 else if (packetId == 12) // Blocking State
                 {
                     IsBlocking = _reader.ReadBoolean();
+                }
+                else if (packetId == 13) // Render Distance Update
+                {
+                    ViewRadius = _reader.ReadInt32();
                 }
                 else if (packetId == 6) {
                     string victimName = _reader.ReadString();
@@ -210,7 +215,7 @@ public class ServerPlayer
         }
     }
 
-    private void BroadcastMove(string name, float x, float y, float rot, byte heldItemId, byte offHandId, bool blocking)
+    private void BroadcastMove(string name, float x, float y, float rot, byte heldItemId, byte offHandId, bool blocking, int hp, int maxHp)
     {
         List<ServerPlayer> playersToNotify;
         lock (ServerProgram.ConnectedPlayers)
@@ -233,6 +238,8 @@ public class ServerPlayer
                     // Add offhand data to movement broadcast so others can see it
                     p.Writer.Write(offHandId);
                     p.Writer.Write(blocking);
+                    p.Writer.Write(hp);
+                    p.Writer.Write(maxHp);
                     p.Writer.Flush();
                 }
             } catch { }
@@ -275,7 +282,15 @@ public class ServerPlayer
 
     public void Damage(int amount) 
     {
-        if (IsBlocking) amount = (int)(amount * 0.15f); // 85% reduction
+        if (IsBlocking) 
+        {
+            amount = (int)(amount * 0.10f); // 90% reduction
+            lock (WriterLock)
+            {
+                Writer.Write((byte)14); // Packet ID 14: Shield Block Sound Trigger
+                Writer.Flush();
+            }
+        }
         Health -= amount;
         if (Health < 0) Health = 0;
         SyncHealth();

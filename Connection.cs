@@ -93,31 +93,33 @@ public class Connection
                     byte heldId = _reader.ReadByte();
                     byte offHandId = _reader.ReadByte();
                     bool isBlocking = _reader.ReadBoolean();
+                    int hp = _reader.ReadInt32();
+                    int maxHp = _reader.ReadInt32();
 
                     // Safety check: Don't process if the game state changed
                     if (Program.PlayingState != null)
                     {
-                        // If we already know this player, update them
-                        if (Program.PlayingState.Others.ContainsKey(name))
+                        if (Program.PlayingState.Others.TryGetValue(name, out var other))
                         {
-                            Program.PlayingState.Others[name].Position = new Vector2(x, y);
-                            Program.PlayingState.Others[name].Rotation = rot;
-                            Program.PlayingState.Others[name].HeldItemID = heldId;
-                            Program.PlayingState.Others[name].OffHandItemID = offHandId;
-                            Program.PlayingState.Others[name].IsBlocking = isBlocking;
+                            other.Position = new Vector2(x, y);
+                            other.Rotation = rot;
+                            other.HeldItemID = heldId;
+                            other.OffHandItemID = offHandId;
+                            other.IsBlocking = isBlocking;
+                            other.Health = hp;
+                            other.MaxHealth = maxHp;
                         }
-                        // If it's a new player (and not us), add them to the world
                         else if (name != Program.CurrentUser.Username)
                         {
                             Console.WriteLine($"Player {name} entered the vision range.");
-                            // Create the player at the received position
                             Player newRemotePlayer = new Player(name, new Vector2(x, y));
                             newRemotePlayer.Color = Raylib_cs.Color.White; // Remote players are white
                             newRemotePlayer.Rotation = rot;
                             newRemotePlayer.HeldItemID = heldId;
                             newRemotePlayer.OffHandItemID = offHandId;
                             newRemotePlayer.IsBlocking = isBlocking;
-                            
+                            newRemotePlayer.Health = hp;
+                            newRemotePlayer.MaxHealth = maxHp;
                             Program.PlayingState.Others[name] = newRemotePlayer;
                         }
                     }
@@ -188,6 +190,10 @@ public class Connection
                         if (type == 0) Program.PlayingState.RaidTimer = val;
                         else Program.PlayingState.RaidBossHealth = val;
                     }
+                }
+                else if (packetId == 14) // Shield Block Sound Trigger
+                {
+                    AudioManager.PlaySound("shield_block");
                 }
             }
         }
@@ -266,6 +272,18 @@ public class Connection
             _writer.Write(isBlocking);
             _writer.Flush();
         } catch { _isConnected = false; }
+    }
+
+    public void SendRenderDistance(int radius)
+    {
+        if (!_isConnected || _writer == null) return;
+        try
+        {
+            _writer.Write((byte)13); // Packet ID 13: Render Distance Update
+            _writer.Write(radius);
+            _writer.Flush();
+        }
+        catch { _isConnected = false; }
     }
 
     public void SendChat(string message)

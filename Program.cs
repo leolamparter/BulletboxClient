@@ -1,11 +1,11 @@
-﻿﻿using Raylib_cs;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
 using System.IO;
 using BulletboxClient;
 using DiscordRPC;
 
-public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, FRIENDS }
+public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, FRIENDS, DISCONNECTED, DEATH }
 
 class Program
 {
@@ -16,6 +16,8 @@ class Program
     public static Playing? PlayingState;
     
     // NEW: Pause State
+    public static string LastIP = "127.0.0.1";
+    public static int LastPort = 32308;
     public static bool IsPaused = false;
     public static PauseMenu? pauseMenu;
     public static GameState cameFrom = GameState.HOME;
@@ -72,19 +74,23 @@ class Program
         }
 
         Raylib.SetConfigFlags(ConfigFlags.ResizableWindow);
-        Raylib.InitWindow(800, 480, "Bulletbox | C# Edition");
+        Raylib.InitWindow(800, 480, "Bulletbox");
+        Raylib.InitAudioDevice();
         Raylib.SetTargetFPS(60);
 
         // MANDATORY: Stops ESC from instantly killing the app
         Raylib.SetExitKey(KeyboardKey.Null); 
 
         CurrentUser = SaveManager.Load();
+        Settings.FOV = CurrentUser.FOV;
 
         HomeScreen homeScreen = new HomeScreen();
         LoginScreen loginScreen = new LoginScreen();
         pauseMenu = new PauseMenu(); // Initialize the menu
         FriendsScreen friendsScreen = new FriendsScreen();
         OptionsScreen optionsScreen = new OptionsScreen();
+        DisconnectedScreen disconnectedScreen = new DisconnectedScreen();
+        DeathScreen deathScreen = new DeathScreen();
 
         // Initialize
         var client = new DiscordRpcClient("1507766634889347295");
@@ -124,6 +130,9 @@ class Program
                         PlayingState = new Playing(string.IsNullOrEmpty(CurrentUser.Username) ? "Player" : CurrentUser.Username);
                     }
 
+                    LastIP = "127.0.0.1";
+                    LastPort = 32308;
+
                     // 2. Ensure a fallback username for local play
                     if (string.IsNullOrEmpty(CurrentUser.Username)) CurrentUser.Username = "Player";
 
@@ -131,6 +140,7 @@ class Program
                     Net.Connect("127.0.0.1", 32308, CurrentUser.Username, "local_auth");
 
                     if (Net.IsConnected()) CurrentState = GameState.PLAYING;
+                    else CurrentState = GameState.DISCONNECTED;
                     break;
                 case GameState.LOGIN:
                     loginScreen.Update();
@@ -146,8 +156,8 @@ class Program
                     // Only initiate a connection if we aren't already connected (e.g. coming from Home -> Multiplayer)
                     if (!Net.IsConnected())
                     {
-                        // Net.Connect("bore.pub", 43542, CurrentUser.Username, CurrentUser.Password);
-                        Net.Connect("127.0.0.1", 32308, CurrentUser.Username, CurrentUser.Password);
+                        DisconnectAndLeave(GameState.DISCONNECTED);
+                        break;
                     }
 
                     // Always update playing state so networking/health packets process
@@ -156,13 +166,24 @@ class Program
                     if (IsPaused) pauseMenu.Update();
 
                     // Death Check: Kick on death
-                    if (PlayingState != null && PlayingState.CurrentHealth <= 0) Program.DisconnectAndLeave();
+                    if (PlayingState != null && PlayingState.CurrentHealth <= 0) Program.DisconnectAndLeave(GameState.DEATH);
                     break;
                 case GameState.FRIENDS:
                     friendsScreen.Update();
                     break;
                 case GameState.OPTIONS:
                     optionsScreen.Update();
+                    // Save settings if we just moved back to the home or playing screen
+                    if (CurrentState != GameState.OPTIONS)
+                    {
+                        SaveManager.Save(CurrentUser);
+                    }
+                    break;
+                case GameState.DISCONNECTED:
+                    disconnectedScreen.Update();
+                    break;
+                case GameState.DEATH:
+                    deathScreen.Update();
                     break;
             }
 
@@ -198,16 +219,42 @@ class Program
                 case GameState.FRIENDS:
                     friendsScreen.Draw();
                     break;
+                case GameState.DISCONNECTED:
+                    disconnectedScreen.Draw();
+                    break;
+                case GameState.DEATH:
+                    deathScreen.Draw();
+                    break;
             }
             Raylib.EndDrawing();
         }
 
         // Call this when the game closes
+        SaveManager.Save(CurrentUser);
+        AudioManager.UnloadAll();
+        Raylib.CloseAudioDevice();
         client.Dispose();
         Raylib.CloseWindow();
     }
 
-    public static void DisconnectAndLeave()
+    public static int GetRequiredChunkRadius()
+    {
+        // Match the chunkSize defined in Playing.cs (16 world units)
+        const float chunkSize = 16f;
+        
+        // Calculate visible world area based on zoom
+        float visibleWidth = Raylib.GetScreenWidth() / Settings.FOV;
+        float visibleHeight = Raylib.GetScreenHeight() / Settings.FOV;
+        
+        // Calculate how many chunks are needed to reach the edge from the center
+        int horizontalRadius = (int)Math.Ceiling((visibleWidth / 2.0f) / chunkSize);
+        int verticalRadius = (int)Math.Ceiling((visibleHeight / 2.0f) / chunkSize);
+        
+        // Return the max radius plus a 1-chunk buffer to prevent "popping" at edges
+        return Math.Max(horizontalRadius, verticalRadius) + 1;
+    }
+
+    public static void DisconnectAndLeave(GameState targetState = GameState.HOME)
     {
         Net.Disconnect();
         LanDiscovery.StopListening();
@@ -215,6 +262,7 @@ class Program
         ServerProgram.IsRunning = false;
         PlayingState = null;   
         IsPaused = false;      
-        CurrentState = GameState.HOME;
+        Raylib.ShowCursor();
+        CurrentState = targetState;
     }
 }

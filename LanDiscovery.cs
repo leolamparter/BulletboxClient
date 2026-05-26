@@ -12,6 +12,7 @@ public class LanDiscovery
     private static UdpClient? _listenerClient;
     private static bool _isBroadcasting = false;
     private static bool _isListening = false;
+    public static bool IsAccessDenied = false;
 
     public static Dictionary<string, (int port, DateTime lastSeen)> DiscoveredWorlds = new();
 
@@ -49,6 +50,7 @@ public class LanDiscovery
     {
         if (_isListening) return;
         _isListening = true;
+        IsAccessDenied = false;
         lock (DiscoveredWorlds) { DiscoveredWorlds.Clear(); }
 
         try 
@@ -56,9 +58,16 @@ public class LanDiscovery
             _listenerClient = new UdpClient(DiscoveryPort);
             _listenerClient.Client.ReceiveTimeout = 500; // Check _isListening every 500ms
         }
+        catch (SocketException ex) when (ex.NativeErrorCode == 1 || ex.NativeErrorCode == 13 || ex.SocketErrorCode == SocketError.AccessDenied)
+        {
+            IsAccessDenied = true;
+            _isListening = false;
+            return;
+        }
         catch (Exception ex) 
         {
             Console.WriteLine($"[LAN] Failed to bind listener: {ex.Message}");
+            _isListening = false;
             return;
         }
 
@@ -82,7 +91,12 @@ public class LanDiscovery
                 {
                     continue; // Timeout reached, loop back and check _isListening
                 }
-                catch { break; }
+                catch (Exception ex) 
+                { 
+                    if (ex is SocketException sx && (sx.NativeErrorCode == 1 || sx.NativeErrorCode == 13)) IsAccessDenied = true;
+                    _isListening = false;
+                    break; 
+                }
             }
         });
         t.IsBackground = true;

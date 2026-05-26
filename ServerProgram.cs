@@ -16,15 +16,25 @@ public class ServerProgram
         if (IsRunning) return;
         IsRunning = true;
 
+        Random rand = new Random();
+
+        // Reset world state for a clean restart
+        BulletboxWorld.RaidActive = false;
+        BulletboxWorld.RaidTimer = (float)rand.Next(40, 61); 
+        BulletboxWorld.Raiders.Clear();
+
         TcpListener listener = new TcpListener(IPAddress.Any, 32308);
         listener.Start();
         Console.WriteLine("[Integrated Server] Started on 32308...");
 
         // Start the World Logic Tick (AI and Raid)
         _ = Task.Run(async () => {
-            Random rand = new Random();
+            float raidInitialMaxHP = 0;
+
             while (IsRunning) {
                 await Task.Delay(16); // ~60 FPS
+                if (Program.IsPaused && Program.LastIP == "127.0.0.1") continue;
+
                 float dt = 0.016f;
 
                 if (!BulletboxWorld.RaidActive) {
@@ -37,17 +47,28 @@ public class ServerProgram
                             if (ConnectedPlayers.Count > 0) 
                                 spawnCenter = BulletboxWorld.PlayerLocations.GetValueOrDefault(ConnectedPlayers[0].Username, Vector2.Zero);
                         }
+                        raidInitialMaxHP = 0;
 
                         for (int i = 0; i < 5; i++) {
                             float angle = (float)(rand.NextDouble() * Math.PI * 2);
                             float dist = 660f; // Just past chunkViewRadius (40 * 16 = 640)
                             Vector2 spawnPos = spawnCenter + new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
                             
-                            var bot = new RaiderBot($"Raider {rand.Next(1000, 9999)}", spawnPos);
-                            int weaponRoll = rand.Next(3);
-                            bot.HeldItemID = weaponRoll == 0 ? (byte)'S' : (weaponRoll == 1 ? (byte)'K' : (byte)'P');
-                            bot.AttackCooldown = weaponRoll == 0 ? 0.425f : (weaponRoll == 1 ? 0.85f : 0.65f);
+                            var bot = new RaiderBot($"Raider {rand.Next(1000, 9999)}", spawnPos);                            
+                            int rarityRoll = rand.Next(100); // 0-99
+                            if (rarityRoll < 2) { // 0, 1 (2% chance)
+                                bot.HeldItemID = (byte)'P'; // Spear
+                                bot.AttackCooldown = 0.65f;
+                            } else if (rarityRoll < 10) { // 2-9 (8% chance)
+                                bot.HeldItemID = (byte)'K'; // Kanabo
+                                bot.AttackCooldown = 0.85f;
+                            } else { // 10-99 (90% chance)
+                                bot.HeldItemID = (byte)'S'; // Sword
+                                bot.AttackCooldown = 0.425f;
+                            }
+
                             
+                            raidInitialMaxHP += bot.MaxHealth;
                             BulletboxWorld.Raiders.Add(bot);
                         }
                     }
@@ -56,12 +77,12 @@ public class ServerProgram
                 } else {
                     UpdateRaiderAI(dt);
                     
-                    float totalHp = 0, totalMax = 0;
-                    foreach(var b in BulletboxWorld.Raiders) { totalHp += b.Health; totalMax += b.MaxHealth; }
+                    float totalHp = 0;
+                    foreach(var b in BulletboxWorld.Raiders) { totalHp += b.Health; }
                     
                     if (BulletboxWorld.Raiders.Count == 0 || totalHp <= 0) {
                         BulletboxWorld.RaidActive = false;
-                        BulletboxWorld.RaidTimer = 60f;
+                        BulletboxWorld.RaidTimer = (float)rand.Next(40, 61);
                         BulletboxWorld.Raiders.Clear();
                         lock(ConnectedPlayers) {
                             foreach(var p in ConnectedPlayers) {
@@ -71,7 +92,7 @@ public class ServerProgram
                         }
                     }
                     // Broadcast Bossbar (Packet 11, Type 1)
-                    BroadcastRaidUpdate(1, totalMax > 0 ? totalHp / totalMax : 0);
+                    BroadcastRaidUpdate(1, raidInitialMaxHP > 0 ? totalHp / raidInitialMaxHP : 0);
                 }
             }
         });
@@ -98,8 +119,8 @@ public class ServerProgram
                     }
                 }
 
-                float visionRange = 45 * 16; // 45 chunks
-                if (target != null && minDist < visionRange) {
+                float visionRange = 45 * 16; // Raiders always have a vision of 45 chunks
+                if (target != null && minDist < visionRange + 32) { // 2 chunk buffer
                     bot.WanderTarget = null; // Clear wander if we see a player
                     
                     Vector2 targetPos = BulletboxWorld.PlayerLocations[target.Username];
@@ -120,13 +141,17 @@ public class ServerProgram
                     
                     bot.Rotation = (float)(Math.Atan2(dir.Y, dir.X) * (180.0 / Math.PI)) + (MathF.Sin(time * 5f + phase) * 8f);
                     
-                    // Always keep moving, but slow down slightly when in melee range
-                    float moveSpeed = (minDist < 100) ? 120f : 250f;
+                    // Dynamic movement based on weapon range
+                    float attackRange = 108f; // 120 * 0.9
+                    if (ServerWeaponStats.Library.TryGetValue(bot.HeldItemID, out var stats)) attackRange = stats.Range * 0.9f;
+
+                    float stopDist = attackRange * 0.85f; // Aim to stay slightly inside the reach
+                    
+                    float moveSpeed = (minDist < stopDist) ? 60f : 260f;
                     float finalSpeed = moveSpeed + (bot.Name.GetHashCode() % 40);
                     bot.Position += (dir * finalSpeed + sideStepDir * strafeAmount) * dt;
 
                     // Attack logic (Sword, Kanabo, or Spear)
-                    float attackRange = bot.HeldItemID == (byte)'P' ? 180f : 120f;
                     bot.AttackTimer += dt;
                     if (minDist < attackRange && bot.AttackTimer >= bot.AttackCooldown && bot.FleeTimer <= 0) {
                         target.Damage(bot.HeldItemID == (byte)'K' ? 25 : 12);
@@ -174,6 +199,8 @@ public class ServerProgram
                             p.Writer.Write(bot.HeldItemID); 
                             p.Writer.Write((byte)'\0'); // Bots have no offhand
                             p.Writer.Write(false);      // Bots don't block yet
+                            p.Writer.Write(bot.Health);
+                            p.Writer.Write(bot.MaxHealth);
                             p.Writer.Flush();
                         }
                     } catch { }

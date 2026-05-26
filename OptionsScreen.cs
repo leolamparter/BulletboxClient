@@ -60,14 +60,12 @@ public class OptionsScreen
             t = Math.Clamp(t, 0.0f, 1.0f);
             // Map slider 0-1 to Zoom levels 0.5f (Wide FOV) to 2.0f (Narrow FOV)
             Settings.FOV = 0.5f + (t * 1.5f);
+            Program.CurrentUser.FOV = Settings.FOV;
         }
     }
 
     public void Draw()
     {
-        // Keep the game world moving in the background if it exists
-        if (Program.PlayingState != null) Program.PlayingState.Update();
-        
         float sw = Raylib.GetScreenWidth();
         float sh = Raylib.GetScreenHeight();
         float centerX = sw / 2f;

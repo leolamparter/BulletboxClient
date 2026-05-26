@@ -94,7 +94,7 @@ public class Player
         Vector2 center = new Vector2(Position.X + 32, Position.Y + 32);
         
         // Now we just draw the pre-rendered texture. This is world-space safe.
-        Rectangle source = new Rectangle(0, 0, 24, -24);
+        Rectangle source = new Rectangle(0, 0, _pixelTarget.Texture.Width, -_pixelTarget.Texture.Height);
         Rectangle dest = new Rectangle(center.X, center.Y, 96, 96);
         Vector2 destOrigin = new Vector2(48, 48); // Center the 96x96 texture on the player center
 
@@ -106,7 +106,7 @@ public class Player
         bool weaponBehind = Rotation < -20 && Rotation > -160;
 
         void DrawWeapon()
-        {
+        {   
             if (weaponTex.Id == 0) return;
             
             float scale = 1.0f; // 2x larger than previous 0.5f
@@ -126,6 +126,10 @@ public class Player
                 {
                     visualRotation += (t * 120f) - 60f;
                 }
+                else if (HeldItemID == (byte)'B') // Bow: Pull back
+                {
+                    currentHoldRadius -= MathF.Sin(t * MathF.PI) * 15f;
+                }
             }
 
             // Calculate hand position relative to center using possibly modified radius/rotation
@@ -135,9 +139,14 @@ public class Player
                 center.Y + MathF.Sin(rad) * currentHoldRadius
             );
 
+            if (HeldItemID == (byte)'B') // Bow needs to be rotated 90 degrees counter-clockwise
+            {
+                visualRotation -= 90f;
+            }
+
             Rectangle src = new Rectangle(0, 0, weaponTex.Width, weaponTex.Height);
             Rectangle wDest = new Rectangle(handPos.X, handPos.Y, weaponTex.Width * scale, weaponTex.Height * scale);
-            
+
             // Pivot at the middle-left (the handle)
             Vector2 origin = new Vector2(0, (weaponTex.Height * scale) / 2);
             
@@ -163,28 +172,52 @@ public class Player
 
             Rectangle src = new Rectangle(0, 0, shieldTex.Width, shieldTex.Height);
             Rectangle dest = new Rectangle(shieldPos.X, shieldPos.Y, shieldTex.Width * scale, shieldTex.Height * scale);
-            Vector2 origin = new Vector2((shieldTex.Width * scale) / 2, (shieldTex.Height * scale) / 2);
-            Raylib.DrawTexturePro(shieldTex, src, dest, origin, visualRotation + 90f, Color.White);
+            Vector2 origin = new Vector2((shieldTex.Width * scale) / 2, (shieldTex.Height * scale) / 2); // Center pivot
+            Raylib.DrawTexturePro(shieldTex, src, dest, origin, visualRotation - 90f, Color.White);
         }
 
         // 3. Execution Pass
         if (weaponBehind) { DrawWeapon(); DrawOffhand(); }
         Raylib.DrawTexturePro(_pixelTarget.Texture, source, dest, destOrigin, 0f, Color.White);
         if (!weaponBehind) { DrawWeapon(); DrawOffhand(); }
+    }
 
-        // 3. Draw Name Tag
-        int textWidth = Raylib.MeasureText(Name, 20);
-        int xPos = (int)(Position.X + 32 - (textWidth / 2)); 
-        int yPos = (int)Position.Y - 30;
-        Raylib.DrawText(Name, xPos, yPos, 20, Color.White);
-
-        // 4. Simple Overhead Health Bar (Visual only)
-        float healthBarWidth = 64;
-        float healthPercent = (float)Health / MaxHealth;
+    public void DrawOverheadHearts(Vector2 worldPos, int health, int max)
+    {
+        if (max <= 0) return;
         
-        // Background (Black)
-        Raylib.DrawRectangle((int)Position.X, (int)Position.Y - 10, (int)healthBarWidth, 5, Color.Black);
-        // Foreground (Red)
-        Raylib.DrawRectangle((int)Position.X, (int)Position.Y - 10, (int)(healthBarWidth * healthPercent), 5, Color.Red);
+        Vector2 screenPos = Raylib.GetWorldToScreen2D(worldPos + new Vector2(0, -47), Program.PlayingState!.Cam.RaylibCamera); // worldPos is now player center (Position + 32, 32)
+        float percent = Math.Clamp(health / (float)max, 0, 1);
+        int totalQuarters = 12; // 3 hearts * 4 quarters
+        int filledQuarters = (int)MathF.Round(percent * totalQuarters);
+
+        float heartSize = 16f;
+        float spacing = 2f;
+        float totalWidth = (3 * heartSize) + (2 * spacing);
+        float startX = screenPos.X - (totalWidth / 2);
+
+        for (int i = 0; i < 3; i++)
+        {
+            int quarters = Math.Clamp(filledQuarters - (i * 4), 0, 4);
+            Texture2D tex = quarters switch
+            {
+                4 => AssetManager.GetTexture("heart_full"),
+                3 => AssetManager.GetTexture("heart_quarter"), 
+                2 => AssetManager.GetTexture("heart_half"),
+                1 => AssetManager.GetTexture("heart_quarter"),
+                _ => AssetManager.GetTexture("heart_empty")
+            };
+
+            if (tex.Id != 0)
+            {
+                Raylib.DrawTextureEx(tex, new Vector2(startX + i * (heartSize + spacing), screenPos.Y), 0f, heartSize / tex.Width, Color.White);
+            }
+        }
+
+        // Draw Name Tag
+        int textWidth = Raylib.MeasureText(Name, 20);
+        int xPos = (int)(screenPos.X - (textWidth / 2)); 
+        int yPos = (int)screenPos.Y - 25; // Position above hearts
+        Raylib.DrawText(Name, xPos, yPos, 20, Color.White);
     }
 }

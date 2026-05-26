@@ -20,7 +20,6 @@ public class HomeScreen
 
         // We initialize with dummy positions; Draw() will position them correctly
         buttons.Add(new UIButton("SINGLEPLAYER", Vector2.Zero, 40, true));
-        buttons.Add(new UIButton("MULTIPLAYER", Vector2.Zero, 40));
         buttons.Add(new UIButton("FRIENDS", Vector2.Zero, 40));
         buttons.Add(new UIButton("OPTIONS", Vector2.Zero, 40));
         buttons.Add(new UIButton("QUIT GAME", Vector2.Zero, 40));
@@ -33,23 +32,17 @@ public class HomeScreen
         {
             if (buttons[i].IsClicked())
             {
-                if (i == 0) Program.CurrentState = GameState.SINGLEPLAYER_CONNECTING;
-                if (i == 1)
-                {
-                    if (Program.CurrentUser.HasLoggedIn) 
-                        Program.CurrentState = GameState.PLAYING;
-                    else 
-                        Program.CurrentState = GameState.LOGIN;
-                }
-                if (i == 2) {
+                string text = buttons[i].Text;
+                if (text == "SINGLEPLAYER") Program.CurrentState = GameState.SINGLEPLAYER_CONNECTING;
+                else if (text == "FRIENDS") {
                     Program.CurrentState = GameState.FRIENDS;
                     LanDiscovery.StartListening();
                 }
-                if (i == 3) {
+                else if (text == "OPTIONS") {
                     Program.cameFrom = GameState.HOME;
                     Program.CurrentState = GameState.OPTIONS;
                 }
-                if (i == 4) Environment.Exit(0);
+                else if (text == "QUIT GAME") Environment.Exit(0);
             }
         }
     }
@@ -76,12 +69,6 @@ public class HomeScreen
         {
             buttons[i].Position = new Vector2(centerX, startY + (i * spacing));
             buttons[i].Draw();
-            
-            if (buttons[i].Text == "MULTIPLAYER")
-            {
-                int textWidth = Raylib.MeasureText("MULTIPLAYER", 40);
-                Raylib.DrawText("(EXPERIMENTAL)", (int)centerX + (textWidth / 2) + 10, (int)buttons[i].Position.Y - 5, 15, Color.Gray);
-            }
         }
     }
 }

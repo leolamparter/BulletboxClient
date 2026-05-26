@@ -12,11 +12,13 @@ public class FriendsScreen
     private string _manualPort = "32308";
     private int _activeField = -1; // 0 for IP, 1 for Port
     private UIButton _manualJoinBtn;
+    private UIButton _retryBtn;
 
     public FriendsScreen()
     {
         backButton = new UIButton("BACK", Vector2.Zero, 30, true);
         _manualJoinBtn = new UIButton("JOIN SERVER", Vector2.Zero, 20, true);
+        _retryBtn = new UIButton("RETRY SCAN", Vector2.Zero, 20);
     }
 
     public void Update()
@@ -34,6 +36,15 @@ public class FriendsScreen
         {
             LanDiscovery.StopListening();
             Program.CurrentState = GameState.HOME;
+        }
+
+        if (LanDiscovery.IsAccessDenied)
+        {
+            _retryBtn.Position = new Vector2(centerX, centerY + 60);
+            if (_retryBtn.IsClicked())
+            {
+                LanDiscovery.StartListening();
+            }
         }
 
         lock (LanDiscovery.DiscoveredWorlds)
@@ -77,9 +88,12 @@ public class FriendsScreen
             if (int.TryParse(_manualPort, out int p)) {
                 if (string.IsNullOrEmpty(Program.CurrentUser.Username)) Program.CurrentUser.Username = "Player";
                 if (Program.PlayingState == null) Program.PlayingState = new Playing(Program.CurrentUser.Username);
+                Program.LastIP = _manualIp;
+                Program.LastPort = p;
                 LanDiscovery.StopListening();
                 Program.Net.Connect(_manualIp, p, Program.CurrentUser.Username, "manual_auth");
                 if (Program.Net.IsConnected()) Program.CurrentState = GameState.PLAYING;
+                else Program.CurrentState = GameState.DISCONNECTED;
             }
         }
 
@@ -97,9 +111,12 @@ public class FriendsScreen
                     Program.PlayingState = new Playing(Program.CurrentUser.Username);
                 }
 
+                Program.LastIP = item.ip;
+                Program.LastPort = item.port;
                 LanDiscovery.StopListening();
                 Program.Net.Connect(item.ip, item.port, Program.CurrentUser.Username, "lan_auth");
                 if (Program.Net.IsConnected()) Program.CurrentState = GameState.PLAYING;
+                else Program.CurrentState = GameState.DISCONNECTED;
             }
         }
     }
@@ -115,6 +132,13 @@ public class FriendsScreen
         if (worldButtons.Count == 0)
         {
             Raylib.DrawText("Scanning for worlds...", (int)centerX - 100, (int)centerY, 20, Color.LightGray);
+        }
+        
+        if (LanDiscovery.IsAccessDenied)
+        {
+            Raylib.DrawText("Local Network access denied.", (int)centerX - 140, (int)centerY - 20, 20, Color.Red);
+            Raylib.DrawText("Please check macOS System Settings.", (int)centerX - 160, (int)centerY + 10, 18, Color.Gray);
+            _retryBtn.Draw();
         }
 
         for (int i = 0; i < worldButtons.Count; i++)
