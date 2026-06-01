@@ -1,33 +1,41 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using Raylib_cs;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
 using System.IO;
 using BulletboxClient;
 using DiscordRPC;
 
-public enum GameState { HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, FRIENDS, DISCONNECTED, DEATH }
+public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, FRIENDS, DISCONNECTED, DEATH }
 
 class Program
 {
-    public static GameState CurrentState = GameState.HOME;
+    public static GameState CurrentState = GameState.SPLASH;
     public static UserData CurrentUser = new UserData(); 
     
     public static Connection Net = new Connection();
     public static Playing? PlayingState;
+    public static SplashScreen splashScreen;
     
     // NEW: Pause State
     public static string LastIP = "127.0.0.1";
     public static int LastPort = 32308;
     public static bool IsPaused = false;
+
+    public static void TriggerSplash(GameState next, Action? loadingAction = null)
+    {
+        splashScreen.Reset(next, loadingAction);
+        CurrentState = GameState.SPLASH;
+    }
+
     public static PauseMenu? pauseMenu;
     public static GameState cameFrom = GameState.HOME;
 
     static void Main()
     {
         // Use ProcessPath to find the real location of the binary on disk.
-        string searchPath = Path.GetDirectoryName(Environment.ProcessPath);
-        string initialSearchPath = searchPath;
-        string finalWorkingDir = null;
+        string? searchPath = Path.GetDirectoryName(Environment.ProcessPath);
+        string? initialSearchPath = searchPath;
+        string? finalWorkingDir = null;
         
         Console.WriteLine($"[Core] Initial ProcessPath Dir: {initialSearchPath}");
 
@@ -47,7 +55,7 @@ class Program
 
             // macOS Bundle Check: Contents/Resources/resources
             // If currentSearchPath is Contents/MacOS, parentDir is Contents
-            string parentDir = Path.GetDirectoryName(searchPath);
+            string? parentDir = Path.GetDirectoryName(searchPath);
             if (parentDir != null)
             {
                 string macResourcesFolder = Path.Combine(parentDir, "Resources"); // This would be Contents/Resources
@@ -60,7 +68,7 @@ class Program
                     break;
                 }
             }
-            searchPath = parentDir; // Move up one level
+            searchPath = parentDir!; // Move up one level
         }
 
         if (finalWorkingDir != null) 
@@ -87,6 +95,7 @@ class Program
         HomeScreen homeScreen = new HomeScreen();
         LoginScreen loginScreen = new LoginScreen();
         pauseMenu = new PauseMenu(); // Initialize the menu
+        splashScreen = new SplashScreen();
         FriendsScreen friendsScreen = new FriendsScreen();
         OptionsScreen optionsScreen = new OptionsScreen();
         DisconnectedScreen disconnectedScreen = new DisconnectedScreen();
@@ -111,12 +120,19 @@ class Program
             // Toggle Pause with ESC only when in-game
             if (Raylib.IsKeyPressed(KeyboardKey.Escape)) 
             {
-                if (CurrentState == GameState.PLAYING) IsPaused = !IsPaused;
+                if (CurrentState == GameState.PLAYING) 
+                {
+                    IsPaused = !IsPaused;
+                    if (IsPaused) AudioManager.StopAll();
+                }
             }
 
             // --- UPDATE ---
             switch (CurrentState)
             {
+                case GameState.SPLASH:
+                    splashScreen.Update();
+                    break;
                 case GameState.HOME:
                     homeScreen.Update();
                     break;
@@ -166,7 +182,12 @@ class Program
                     if (IsPaused) pauseMenu.Update();
 
                     // Death Check: Kick on death
-                    if (PlayingState != null && PlayingState.CurrentHealth <= 0) Program.DisconnectAndLeave(GameState.DEATH);
+                    if (PlayingState != null && PlayingState.CurrentHealth <= 0) 
+                    {
+                        AudioManager.StopAll();
+                        AudioManager.PlaySound("player_death");
+                        Program.DisconnectAndLeave(GameState.DEATH);
+                    }
                     break;
                 case GameState.FRIENDS:
                     friendsScreen.Update();
@@ -193,6 +214,9 @@ class Program
 
             switch (CurrentState)
             {
+                case GameState.SPLASH:
+                    splashScreen.Draw();
+                    break;
                 case GameState.HOME:
                     homeScreen.Draw();
                     break;

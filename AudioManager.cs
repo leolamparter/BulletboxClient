@@ -21,6 +21,39 @@ public static class AudioManager
         }
     }
 
+    public static void StopSound(string key)
+    {
+        if (_sounds.TryGetValue(key, out var sound))
+        {
+            Raylib.StopSound(sound);
+        }
+    }
+
+    public static void SetVolume(string key, float volume)
+    {
+        if (_sounds.TryGetValue(key, out var sound))
+        {
+            Raylib.SetSoundVolume(sound, volume);
+        }
+    }
+
+    public static bool IsSoundPlaying(string key)
+    {
+        if (_sounds.TryGetValue(key, out var sound))
+        {
+            return Raylib.IsSoundPlaying(sound);
+        }
+        return false;
+    }
+
+    public static void StopAll()
+    {
+        foreach (var sound in _sounds.Values)
+        {
+            Raylib.StopSound(sound);
+        }
+    }
+
     public static void UnloadAll()
     {
         foreach (var sound in _sounds.Values)

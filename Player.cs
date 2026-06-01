@@ -45,9 +45,10 @@ public class Player
             if (AttackAnimProgress < 0) AttackAnimProgress = 0;
         }
 
-        // Initialize and Update the pixelated texture OUTSIDE of the Camera Mode
-        // This prevents the camera matrix from being discarded during the draw call.
-        if (!_initialized)
+        bool isRaider = Name.StartsWith("Raider");
+
+        // Initialize and Update the pixelated texture OUTSIDE of the Camera Mode for players
+        if (!_initialized && !isRaider)
         {
             _pixelTarget = Raylib.LoadRenderTexture(24, 24);
             Raylib.SetTextureFilter(_pixelTarget.Texture, TextureFilter.Point);
@@ -61,26 +62,27 @@ public class Player
             _initialized = true;
         }
 
-        // Render the spinning shapes into the buffer
-        Raylib.BeginTextureMode(_pixelTarget);
-            Raylib.ClearBackground(Color.Blank);
-            float canvasScale = 24f / 96f;
-            Vector2 texCenter = new Vector2(12, 12);
-            Rectangle templateSource = new Rectangle(0, 0, 64, -64);
-            
-            bool isRaider = Name.StartsWith("Raider");
+        if (!isRaider)
+        {
+            // Render the spinning shapes into the buffer
+            Raylib.BeginTextureMode(_pixelTarget);
+                Raylib.ClearBackground(Color.Blank);
+                float canvasScale = 24f / 96f;
+                Vector2 texCenter = new Vector2(12, 12);
+                Rectangle templateSource = new Rectangle(0, 0, 64, -64);
+                
+                // Outer Square (CCW)
+                Rectangle outerDest = new Rectangle(texCenter.X, texCenter.Y, 64 * canvasScale, 64 * canvasScale);
+                Vector2 outerOrigin = new Vector2(32 * canvasScale, 32 * canvasScale);
+                Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, outerDest, outerOrigin, -_rotation, Color.DarkGreen);
 
-            // Outer Square (CCW)
-            Rectangle outerDest = new Rectangle(texCenter.X, texCenter.Y, 64 * canvasScale, 64 * canvasScale);
-            Vector2 outerOrigin = new Vector2(32 * canvasScale, 32 * canvasScale);
-            Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, outerDest, outerOrigin, -_rotation, isRaider ? Color.Red : Color.DarkGreen);
-
-            // Inner Square (CW)
-            float innerSize = 64 * 0.55f * canvasScale;
-            Rectangle innerDest = new Rectangle(texCenter.X, texCenter.Y, innerSize, innerSize);
-            Vector2 innerOrigin = new Vector2(innerSize / 2, innerSize / 2);
-            Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, innerDest, innerOrigin, _rotation, Color.Magenta);
-        Raylib.EndTextureMode();
+                // Inner Square (CW)
+                float innerSize = 64 * 0.55f * canvasScale;
+                Rectangle innerDest = new Rectangle(texCenter.X, texCenter.Y, innerSize, innerSize);
+                Vector2 innerOrigin = new Vector2(innerSize / 2, innerSize / 2);
+                Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, innerDest, innerOrigin, _rotation, Color.Magenta);
+            Raylib.EndTextureMode();
+        }
     }
 
     public void TriggerAttack()
@@ -93,8 +95,7 @@ public class Player
         // Calculate the center of the player for rotation
         Vector2 center = new Vector2(Position.X + 32, Position.Y + 32);
         
-        // Now we just draw the pre-rendered texture. This is world-space safe.
-        Rectangle source = new Rectangle(0, 0, _pixelTarget.Texture.Width, -_pixelTarget.Texture.Height);
+        // Setup destination for the model (96x96 to match original player size)
         Rectangle dest = new Rectangle(center.X, center.Y, 96, 96);
         Vector2 destOrigin = new Vector2(48, 48); // Center the 96x96 texture on the player center
 
@@ -178,7 +179,36 @@ public class Player
 
         // 3. Execution Pass
         if (weaponBehind) { DrawWeapon(); DrawOffhand(); }
-        Raylib.DrawTexturePro(_pixelTarget.Texture, source, dest, destOrigin, 0f, Color.White);
+        
+        bool isRaider = Name.StartsWith("Raider");
+        if (isRaider)
+        {
+            string raiderTexKey = "raidshroomer_idle";
+            
+            // Determine animation state based on health and proximity
+            if (Health < 30)
+            {
+                raiderTexKey = "raidshroomer_afraid";
+            }
+            else if (Program.PlayingState != null)
+            {
+                // Vision/Detection range (45 chunks * 16 units)
+                float dist = Vector2.Distance(Position, Program.PlayingState.LocalPlayer.Position);
+                if (dist < 720f) raiderTexKey = "raidshroomer_angry";
+            }
+
+            Texture2D raiderTex = AssetManager.GetTexture(raiderTexKey);
+            if (raiderTex.Id != 0)
+            {
+                Rectangle raiderSource = new Rectangle(0, 0, raiderTex.Width, raiderTex.Height);
+                Raylib.DrawTexturePro(raiderTex, raiderSource, dest, destOrigin, 0f, Color.White);
+            }
+        }
+        else
+        {
+            Rectangle playerSource = new Rectangle(0, 0, _pixelTarget.Texture.Width, -_pixelTarget.Texture.Height);
+            Raylib.DrawTexturePro(_pixelTarget.Texture, playerSource, dest, destOrigin, 0f, Color.White);
+        }
         if (!weaponBehind) { DrawWeapon(); DrawOffhand(); }
     }
 

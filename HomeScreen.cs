@@ -33,7 +33,14 @@ public class HomeScreen
             if (buttons[i].IsClicked())
             {
                 string text = buttons[i].Text;
-                if (text == "SINGLEPLAYER") Program.CurrentState = GameState.SINGLEPLAYER_CONNECTING;
+                if (text == "SINGLEPLAYER") 
+                {
+                    Program.TriggerSplash(GameState.SINGLEPLAYER_CONNECTING, () => {
+                        if (Program.PlayingState == null) {
+                            Program.PlayingState = new Playing(string.IsNullOrEmpty(Program.CurrentUser.Username) ? "Player" : Program.CurrentUser.Username);
+                        }
+                    });
+                }
                 else if (text == "FRIENDS") {
                     Program.CurrentState = GameState.FRIENDS;
                     LanDiscovery.StartListening();

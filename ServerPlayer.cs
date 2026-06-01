@@ -61,15 +61,7 @@ public class ServerPlayer
                     
                     world.UpdatePosition(Username, 400, 300);
                     
-                    // Give a shield by default for testing
-                    Inventory[24] = new ServerItemStack((byte)'H', 1);
-
                     Inventory[0] = new ServerItemStack((byte)'S', 1); // Sword
-                    Inventory[1] = new ServerItemStack((byte)'A', 1); // Axe
-                    Inventory[2] = new ServerItemStack((byte)'D', 1); // Dagger
-                    Inventory[3] = new ServerItemStack((byte)'P', 1); // Spear
-                    Inventory[4] = new ServerItemStack((byte)'Y', 1); // Scythe
-                    Inventory[5] = new ServerItemStack((byte)'K', 1); // Kanabo
 
                     lock (WriterLock)
                     {
@@ -185,6 +177,7 @@ public class ServerPlayer
                                     lock (ServerProgram.ConnectedPlayers) {
                                         foreach (var p in ServerProgram.ConnectedPlayers) p.SendLeaveSignal(bot.Name);
                                     }
+                                    AddItem((byte)'R', 1); // Reward player with a Raidshroom
                                 }
                             }
                         }
@@ -213,6 +206,38 @@ public class ServerPlayer
             }
             Writer.Flush();
         }
+    }
+
+    public void AddItem(byte itemId, int amount)
+    {
+        // 1. Try to stack onto existing items of the same ID (limit 99)
+        for (int i = 0; i < Inventory.Length; i++)
+        {
+            if (Inventory[i].ItemID == itemId && Inventory[i].Count < 99)
+            {
+                int space = 99 - Inventory[i].Count;
+                int toAdd = Math.Min(amount, space);
+                Inventory[i].Count += toAdd;
+                amount -= toAdd;
+            }
+            if (amount <= 0) break;
+        }
+
+        // 2. If still have items, find the first empty slot
+        if (amount > 0)
+        {
+            for (int i = 0; i < Inventory.Length; i++)
+            {
+                if (Inventory[i].ItemID == (byte)' ' || Inventory[i].Count <= 0)
+                {
+                    Inventory[i].ItemID = itemId;
+                    Inventory[i].Count = Math.Min(amount, 99);
+                    amount -= Inventory[i].Count;
+                }
+                if (amount <= 0) break;
+            }
+        }
+        SendFullInventory();
     }
 
     private void BroadcastMove(string name, float x, float y, float rot, byte heldItemId, byte offHandId, bool blocking, int hp, int maxHp)

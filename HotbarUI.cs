@@ -77,7 +77,8 @@ public class HotbarUI {
         WeaponStats? stats = null;
         WeaponStats.Library.TryGetValue(stack.ItemID, out stats);
 
-        string name = (stats != null) ? stats.Name : ((char)stack.ItemID).ToString();
+        ItemStats.Library.TryGetValue(stack.ItemID, out var item);
+        string name = item?.Name ?? ((char)stack.ItemID).ToString();
         List<string> infoLines = new List<string>();
 
         if (stats != null) {
@@ -115,22 +116,24 @@ public class HotbarUI {
             char idChar = (char)stack.ItemID;
             string id = idChar.ToString();
             
-            string textureKey = "";
-            if (idChar == 'K') textureKey = "kanabo";
-            else if (idChar == 'P') textureKey = "spear";
-            else if (idChar == 'S') textureKey = "sword";
-            else if (idChar == 'H') textureKey = "shield";
+            ItemStats.Library.TryGetValue(stack.ItemID, out var item);
+            string textureKey = item?.TextureKey ?? "";
             
             Texture2D itemTex = string.IsNullOrEmpty(textureKey) ? new Texture2D() : AssetManager.GetTexture(textureKey);
 
             if (itemTex.Id != 0) {
+                // Only rotate items that have combat stats (weapons)
+                WeaponStats? stats = null;
+                WeaponStats.Library.TryGetValue(stack.ItemID, out stats);
+                float rotation = (stats != null) ? -45f : 0f;
+
                 // Draw centered in slot with small padding
                 float scale = (rect.Width - 10) / itemTex.Width;
                 
-                // Calculate destination and origin for 45-degree CCW rotation centered in the slot
+                // Calculate destination and origin centered in the slot
                 Rectangle dest = new Rectangle(rect.X + rect.Width / 2, rect.Y + rect.Height / 2, itemTex.Width * scale, itemTex.Height * scale);
                 Vector2 origin = new Vector2((itemTex.Width * scale) / 2, (itemTex.Height * scale) / 2);
-                Raylib.DrawTexturePro(itemTex, new Rectangle(0, 0, itemTex.Width, itemTex.Height), dest, origin, -45f, Color.White);
+                Raylib.DrawTexturePro(itemTex, new Rectangle(0, 0, itemTex.Width, itemTex.Height), dest, origin, rotation, Color.White);
             } else {
                 int tw = Raylib.MeasureText(id, 30);
                 Raylib.DrawText(id, (int)(rect.X + rect.Width / 2 - tw / 2), (int)(rect.Y + rect.Height / 2 - 15), 30, Color.White);

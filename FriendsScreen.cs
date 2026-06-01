@@ -104,17 +104,15 @@ public class FriendsScreen
             if (item.joinBtn.IsClicked())
             {
                 if (string.IsNullOrEmpty(Program.CurrentUser.Username)) Program.CurrentUser.Username = "Player";
-
-                // Pre-initialize PlayingState so it's ready to catch incoming packets (health, pos, etc.)
-                if (Program.PlayingState == null)
-                {
-                    Program.PlayingState = new Playing(Program.CurrentUser.Username);
-                }
-
                 Program.LastIP = item.ip;
                 Program.LastPort = item.port;
                 LanDiscovery.StopListening();
-                Program.Net.Connect(item.ip, item.port, Program.CurrentUser.Username, "lan_auth");
+
+                Program.TriggerSplash(GameState.PLAYING, () => {
+                    if (Program.PlayingState == null) Program.PlayingState = new Playing(Program.CurrentUser.Username);
+                    Program.Net.Connect(item.ip, item.port, Program.CurrentUser.Username, "lan_auth");
+                });
+
                 if (Program.Net.IsConnected()) Program.CurrentState = GameState.PLAYING;
                 else Program.CurrentState = GameState.DISCONNECTED;
             }

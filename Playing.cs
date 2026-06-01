@@ -49,6 +49,14 @@ public class Playing
     private int _lastPlayerChunkX = int.MaxValue;
     private int _lastPlayerChunkY = int.MaxValue;
     private bool _lastRaidActive = false;
+    private float _lastRaidTimer = 0f;
+    private float _lastRaidBossHealth = 0f;
+    private bool _hasPlayedCountdown = false;
+
+    // Death/Kill Tracking
+    private List<string> _lastOtherNames = new();
+    private string _lastAttackedName = "";
+    private float _lastAttackTime = 0f;
 
     // Combat Timers
     private float _cAttackTimer = 0f; 
@@ -56,6 +64,12 @@ public class Playing
     private int _selectedHotbarIndex = 0;
     private Vector2 _kbVelocity = Vector2.Zero;
     
+    // Footstep Sound State
+    private string _currentFootstepKey = "";
+    private float _footstepVolume = 0f;
+    private string _fadingFootstepKey = "";
+    private float _fadingFootstepVolume = 0f;
+
     // Chat and UI State
     private bool _isChatting = false;
     private string _chatInput = "";
@@ -88,6 +102,10 @@ public class Playing
         LocalPlayer = new Player(myName, new Vector2(400, 300));
         LocalPlayer.Color = Color.Blue;
         Cam = new CameraManager(LocalPlayer.Position);
+
+        // Initialize starting items: Sword only
+        PlayerInventory.Slots[0].ItemID = (byte)'S';
+
         Hotbar = new HotbarUI(PlayerInventory);
         InvMenu = new InventoryUI(PlayerInventory);
         LoadAssets();
@@ -117,8 +135,14 @@ public class Playing
         AssetManager.LoadTexture("kanabo", "resources/textures/item/kanabo.png");
         AssetManager.LoadTexture("spear", "resources/textures/item/spear.png");
         AssetManager.LoadTexture("sword", "resources/textures/item/sword.png");
+        AssetManager.LoadTexture("raidshroom", "resources/textures/item/raidshroom.png");
         AssetManager.LoadTexture("shield", "resources/textures/item/shield.png");
         AssetManager.LoadTexture("bow", "resources/textures/item/bow.png"); // Assuming 'bow.png' exists
+
+        // Load raidshroomer textures
+        AssetManager.LoadTexture("raidshroomer_idle", "resources/textures/entity/raidshroomer/idle.png");
+        AssetManager.LoadTexture("raidshroomer_angry", "resources/textures/entity/raidshroomer/angry.png");
+        AssetManager.LoadTexture("raidshroomer_afraid", "resources/textures/entity/raidshroomer/afraid.png");
 
         // Load heart textures for overhead health bars
         AssetManager.LoadTexture("heart_full", "resources/textures/ui/health_bar/heart_full.png");
@@ -133,6 +157,17 @@ public class Playing
         // Audio
         AudioManager.LoadSound("raid_horn", "resources/sounds/raid/raid_horn.mp3");
         AudioManager.LoadSound("shield_block", "resources/sounds/item/shield/block_1.mp3");
+        AudioManager.LoadSound("meadow", "resources/sounds/footstep/meadow.mp3");
+        AudioManager.LoadSound("forest", "resources/sounds/footstep/forest.mp3");
+        AudioManager.LoadSound("desert", "resources/sounds/footstep/desert.mp3");
+        AudioManager.LoadSound("stonypeaks", "resources/sounds/footstep/stonypeaks.mp3");
+        AudioManager.LoadSound("beach", "resources/sounds/footstep/beach.mp3");
+        AudioManager.LoadSound("river", "resources/sounds/footstep/river.mp3");
+        AudioManager.LoadSound("sword_swing", "resources/sounds/item/sword/swing_1.mp3");
+        AudioManager.LoadSound("raid_countdown", "resources/sounds/raid/countdown.mp3");
+        AudioManager.LoadSound("player_death", "resources/sounds/player/death.mp3");
+        AudioManager.LoadSound("player_died", "resources/sounds/player/died.mp3");
+        AudioManager.LoadSound("player_kill", "resources/sounds/player/kill.mp3");
 
 
         if (AssetManager.GetTexture("hotbar_active").Id == 0) Console.WriteLine("ERROR: 'hotbar_active' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_active.png");
@@ -179,44 +214,10 @@ public class Playing
             _cAttackTimer += dt;
             _cHitTimer += dt;
 
-            // Update Blocking State
-            bool wasBlocking = LocalPlayer.IsBlocking;
-            LocalPlayer.OffHandItemID = PlayerInventory.Slots[24].ItemID;
-            LocalPlayer.IsBlocking = Raylib.IsMouseButtonDown(MouseButton.Right) && LocalPlayer.OffHandItemID == (byte)'H';
-            
-            if (LocalPlayer.IsBlocking != wasBlocking) {
-                Program.Net.SendBlockingState(LocalPlayer.IsBlocking);
-            }
-
-            // Handle Debug inputs
-            Debug.Update();
-
-            if (_isChatting) return; // Block game input while chatting
-
-            // Handle Hotbar Selection (Keys 1-6)
-            for (int i = 0; i < 6; i++)
-            {
-                if (Raylib.IsKeyPressed(KeyboardKey.One + i))
-                {
-                    _selectedHotbarIndex = i;
-                    Program.Net.SendSlotSwap((byte)i);
-                }
-            }
-
-            Vector2 lastPos = LocalPlayer.Position;
-
-            HandleMovement(dt);
-
-            // Apply and Decay Knockback Velocity
-            LocalPlayer.Position += _kbVelocity * dt;
-            _kbVelocity = Vector2.Lerp(_kbVelocity, Vector2.Zero, dt * 6.5f); // Smooth friction
-
-            // Biome chunk loading/unloading
-            int playerChunkX = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
-            int playerChunkY = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
-
             int targetRadius = Program.GetRequiredChunkRadius();
             bool radiusChanged = targetRadius != ChunkViewRadius;
+            int playerChunkX = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
+            int playerChunkY = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
 
             // Optimization: Only update loading/unloading logic when player enters a new chunk
             if (playerChunkX != _lastPlayerChunkX || playerChunkY != _lastPlayerChunkY || radiusChanged)
@@ -280,6 +281,55 @@ public class Playing
             }
 
             ProcessPendingBlends();
+
+            // River Shimmer Logic: Separately handle deterministic color "rerolling"
+            foreach (var coord in loadedChunks)
+            {
+                if (_chunkSnapshot.TryGetValue(coord, out byte b) && b == 7)
+                {
+                    int hash = (coord.Item1 * 73856093) ^ (coord.Item2 * 19349663);
+                    float duration = 0.8f + (Math.Abs(hash) % 401 / 1000f); // 0.8s to 1.2s
+                    double time = Raylib.GetTime();
+
+                    if ((int)(time / duration) != (int)((time - dt) / duration))
+                        _pendingBlends.Add(coord);
+                }
+            }
+
+            // Update Blocking State
+            bool wasBlocking = LocalPlayer.IsBlocking;
+            LocalPlayer.OffHandItemID = PlayerInventory.Slots[24].ItemID;
+            LocalPlayer.IsBlocking = Raylib.IsMouseButtonDown(MouseButton.Right) && LocalPlayer.OffHandItemID == (byte)'H';
+            
+            if (LocalPlayer.IsBlocking != wasBlocking) {
+                Program.Net.SendBlockingState(LocalPlayer.IsBlocking);
+            }
+
+            // Handle Debug inputs
+            Debug.Update();
+
+            if (_isChatting) return; // Block game input while chatting
+
+            // Handle Hotbar Selection (Keys 1-6)
+            for (int i = 0; i < 6; i++)
+            {
+                if (Raylib.IsKeyPressed(KeyboardKey.One + i))
+                {
+                    _selectedHotbarIndex = i;
+                    Program.Net.SendSlotSwap((byte)i);
+                }
+            }
+
+            Vector2 lastPos = LocalPlayer.Position;
+
+            // Footsteps and Position
+            HandleMovement(dt);
+
+            // Apply and Decay Knockback Velocity
+            LocalPlayer.Position += _kbVelocity * dt;
+            _kbVelocity = Vector2.Lerp(_kbVelocity, Vector2.Zero, dt * 6.5f); // Smooth friction
+
+
 
             // Clear previous arrows
             _playerArrows.Clear();
@@ -364,7 +414,42 @@ public class Playing
         if (RaidActive && !_lastRaidActive)
         {
             AudioManager.PlaySound("raid_horn");
+            _hasPlayedCountdown = false; // Reset for the next cycle
         }
+
+        // Raid countdown logic: plays exactly once at 3 seconds left
+        if (!RaidActive && !_hasPlayedCountdown && RaidTimer <= 3.0f && RaidTimer > 0)
+        {
+            AudioManager.PlaySound("raid_countdown");
+            _hasPlayedCountdown = true;
+        }
+
+        // --- Global Death/Kill Detection ---
+        var currentOtherNames = Others.Keys.ToList();
+        foreach (var name in _lastOtherNames)
+        {
+            if (!currentOtherNames.Contains(name))
+            {
+                // Something died or disconnected
+                AudioManager.PlaySound("player_death"); // death.mp3
+
+                // If it's the target we just hit, play the kill sound on top
+                if (name == _lastAttackedName && (float)Raylib.GetTime() - _lastAttackTime < 1.5f)
+                {
+                    AudioManager.PlaySound("player_kill"); // kill.mp3
+                }
+            }
+        }
+        _lastOtherNames = currentOtherNames;
+
+        // Global Death Trigger: Plays when the Raid Encounter dies
+        if (RaidActive && _lastRaidBossHealth > 0 && RaidBossHealth <= 0)
+        {
+            AudioManager.PlaySound("player_death");
+        }
+
+        _lastRaidBossHealth = RaidBossHealth;
+        _lastRaidTimer = RaidTimer;
         _lastRaidActive = RaidActive;
     }
 
@@ -401,26 +486,102 @@ public class Playing
     {
         float baseSpeed = 350f;
         if (LocalPlayer.IsBlocking) baseSpeed *= 0.55f; // 45% slow down while blocking
-
+        
         Vector2 direction = Vector2.Zero;
-
         if (Raylib.IsKeyDown(KeyboardKey.W)) direction.Y -= 1;
         if (Raylib.IsKeyDown(KeyboardKey.S)) direction.Y += 1;
-        if (Raylib.IsKeyDown(KeyboardKey.A))
-        {
-            direction.X -= 1;
-            LocalPlayer.FacingRight = false;
-        }
-        if (Raylib.IsKeyDown(KeyboardKey.D))
-        {
-            direction.X += 1;
-            LocalPlayer.FacingRight = true;
-        }
+        if (Raylib.IsKeyDown(KeyboardKey.A)) direction.X -= 1;
+        if (Raylib.IsKeyDown(KeyboardKey.D)) direction.X += 1;
+
+        if (direction.X < 0) LocalPlayer.FacingRight = false;
+        else if (direction.X > 0) LocalPlayer.FacingRight = true;
 
         if (direction != Vector2.Zero)
         {
             // Normalize ensures that diagonal movement is not faster than cardinal movement
             LocalPlayer.Position += Vector2.Normalize(direction) * baseSpeed * dt;
+        }
+
+        // --- Footstep Sound Logic ---
+        int cx = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
+        int cy = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
+
+        // Lookup biome with fallback to network cache if snapshot isn't ready
+        byte biome = 0;
+        bool hasBiome = _chunkSnapshot.TryGetValue((cx, cy), out biome);
+        if (!hasBiome)
+        {
+            lock (Program.Net.ChunkBiomesLock)
+            {
+                hasBiome = Program.Net.ChunkBiomes.TryGetValue((cx, cy), out biome);
+            }
+        }
+
+        string targetFootstep = "";
+        if (hasBiome)
+        {
+            targetFootstep = biome switch {
+                0 => "meadow",
+                1 => "forest",
+                2 => "desert",
+                3 => "stonypeaks",
+                4 => "river", // Ocean fallback
+                5 => "beach",
+                6 => "stonypeaks", // Brimstone fallback
+                7 => "river",
+                _ => ""
+            };
+        }
+
+        bool isMoving = direction != Vector2.Zero;
+        bool shouldPlay = isMoving && !string.IsNullOrEmpty(targetFootstep) && !Program.IsPaused;
+
+        // Crossfade logic: if the target changed, move current to fading
+        if (shouldPlay && _currentFootstepKey != targetFootstep)
+        {
+            if (!string.IsNullOrEmpty(_fadingFootstepKey)) AudioManager.StopSound(_fadingFootstepKey);
+            _fadingFootstepKey = _currentFootstepKey;
+            _fadingFootstepVolume = _footstepVolume;
+            _currentFootstepKey = targetFootstep;
+            _footstepVolume = 0f;
+        }
+
+        if (shouldPlay) _footstepVolume = Math.Min(_footstepVolume + dt * 5f, 1.0f);
+        else _footstepVolume = Math.Max(_footstepVolume - dt * 5f, 0.0f);
+
+        if (!string.IsNullOrEmpty(_fadingFootstepKey))
+            _fadingFootstepVolume = Math.Max(_fadingFootstepVolume - dt * 5f, 0.0f);
+
+        if (!string.IsNullOrEmpty(_currentFootstepKey))
+        {
+            if (_footstepVolume <= 0 && !shouldPlay)
+            {
+                AudioManager.StopSound(_currentFootstepKey);
+                _currentFootstepKey = "";
+            }
+            else if (!AudioManager.IsSoundPlaying(_currentFootstepKey) && _footstepVolume > 0)
+            {
+                AudioManager.SetVolume(_currentFootstepKey, _footstepVolume);
+                AudioManager.PlaySound(_currentFootstepKey);
+            }
+            else if (AudioManager.IsSoundPlaying(_currentFootstepKey))
+            {
+                AudioManager.SetVolume(_currentFootstepKey, _footstepVolume);
+            }
+        }
+
+        if (!string.IsNullOrEmpty(_fadingFootstepKey))
+        {
+            if (_fadingFootstepVolume > 0)
+            {
+                if (AudioManager.IsSoundPlaying(_fadingFootstepKey))
+                    AudioManager.SetVolume(_fadingFootstepKey, _fadingFootstepVolume);
+            }
+            else
+            {
+                AudioManager.StopSound(_fadingFootstepKey);
+                _fadingFootstepKey = "";
+            }
         }
     }
 
@@ -489,7 +650,7 @@ public class Playing
 
     private Color CalculateBlendedColor(int cx, int cy, byte myBiome)
     {
-        Color baseCol = GetBiomeBaseColor(myBiome);
+        Color baseCol = GetBiomeBaseColor(myBiome, cx, cy);
         if (myBiome == 7) return baseCol; // Rivers stay sharp
 
         // OPTIMIZATION: Homogeneity Check. 
@@ -516,7 +677,7 @@ public class Playing
                 if (_chunkSnapshot.TryGetValue((cx + dx, cy + dy), out byte nB)) {
                     if (nB == 7) continue; // Rivers are ignored in blending
                     float weight = 0.5f;
-                    Color nCol = GetBiomeBaseColor(nB);
+                    Color nCol = GetBiomeBaseColor(nB, cx + dx, cy + dy);
                     rSum += nCol.R * weight; gSum += nCol.G * weight; bSum += nCol.B * weight;
                     wSum += weight;
                 }
@@ -546,6 +707,8 @@ public class Playing
             if (dmg > 0)
             {
                 LocalPlayer.TriggerAttack();
+                AudioManager.PlaySound("sword_swing");
+                _lastAttackTime = (float)Raylib.GetTime();
                 
                 Vector2 worldMouse = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), Cam.RaylibCamera);
                 foreach (var other in Others.Values.ToList())
@@ -556,6 +719,7 @@ public class Playing
                     if (Raylib.CheckCollisionPointRec(worldMouse, hitBox) && dist <= range)
                     {
                         Console.WriteLine($"Attacking {other.Name} for {dmg} dmg!");
+                        _lastAttackedName = other.Name;
                         Program.Net.SendAttack(other.Name);
                         
                         _cAttackTimer = 0;
@@ -591,41 +755,48 @@ public class Playing
                 wy + chunkSize < screenTopLeft.Y - margin || wy > screenBottomRight.Y + margin) continue;
 
             if (!_blendedColorCache.TryGetValue(coord, out Color drawColor))
-                if (_chunkSnapshot.TryGetValue(coord, out byte b)) drawColor = GetBiomeBaseColor(b); else continue;
+                if (_chunkSnapshot.TryGetValue(coord, out byte b)) drawColor = GetBiomeBaseColor(b, coord.Item1, coord.Item2); else continue;
 
             Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, drawColor);
         }
 
-        // Feature Pass
-        foreach (var coord in loadedChunks)
+        // Feature Pass - Rendered Top to Bottom (Y-Sorting) for correct overlap
+        var sortedFeatures = loadedChunks
+            .Where(coord => {
+                float wx = coord.Item1 * chunkSize;
+                float wy = coord.Item2 * chunkSize;
+                return !(wx + chunkSize < screenTopLeft.X - margin || wx > screenBottomRight.X + margin || 
+                         wy + chunkSize < screenTopLeft.Y - margin || wy > screenBottomRight.Y + margin);
+            })
+            .Where(coord => _featureSnapshot.TryGetValue(coord, out byte feature) && feature != 0)
+            .OrderBy(coord => coord.Item2) // Draw low Y (top) first, high Y (bottom) last
+            .ToList();
+
+        foreach (var coord in sortedFeatures)
         {
             float wx = coord.Item1 * chunkSize;
             float wy = coord.Item2 * chunkSize;
+            _featureSnapshot.TryGetValue(coord, out byte feature);
 
-            if (wx + chunkSize < screenTopLeft.X - margin || wx > screenBottomRight.X + margin || 
-                wy + chunkSize < screenTopLeft.Y - margin || wy > screenBottomRight.Y + margin) continue;
+            string texName = "";
+            bool isSmall = false;
+            FeatureType type = (FeatureType)feature;
 
-            if (_featureSnapshot.TryGetValue(coord, out byte feature) && feature != 0)
+            switch (type)
             {
-                string texName = "";
-                bool isSmall = false;
-                FeatureType type = (FeatureType)feature;
-
-                switch (type)
-                {
-                    case FeatureType.LargeTree: texName = "large_tree"; break;
-                    case FeatureType.SmallTree: texName = "small_tree"; break;
-                    case FeatureType.MeadowHedge: texName = "meadow_hedge"; isSmall = true; break;
-                    case FeatureType.MeadowFlowers: texName = "meadow_flowers"; isSmall = true; break;
-                    case FeatureType.Stone: texName = "stone"; isSmall = true; break;
-                    case FeatureType.PalmTree: texName = "palm_tree"; break;
-                    case FeatureType.DesertLog: texName = "desert_log"; isSmall = true; break;
-                    case FeatureType.Tumbleweed: texName = "tumbleweed"; isSmall = true; break;
-                    case FeatureType.OasisDesert: texName = "oasis_desert"; break;
-                    case FeatureType.BeachUmbrella: texName = "beach_umbrella"; isSmall = true; break;
-                    case FeatureType.Sailboat: texName = "sailboat"; break;
-                    case FeatureType.SulfurSpring: texName = "sulfur_spring"; break;
-                }
+                case FeatureType.LargeTree: texName = "large_tree"; break;
+                case FeatureType.SmallTree: texName = "small_tree"; break;
+                case FeatureType.MeadowHedge: texName = "meadow_hedge"; isSmall = true; break;
+                case FeatureType.MeadowFlowers: texName = "meadow_flowers"; isSmall = true; break;
+                case FeatureType.Stone: texName = "stone"; isSmall = true; break;
+                case FeatureType.PalmTree: texName = "palm_tree"; break;
+                case FeatureType.DesertLog: texName = "desert_log"; isSmall = true; break;
+                case FeatureType.Tumbleweed: texName = "tumbleweed"; isSmall = true; break;
+                case FeatureType.OasisDesert: texName = "oasis_desert"; break;
+                case FeatureType.BeachUmbrella: texName = "beach_umbrella"; isSmall = true; break;
+                case FeatureType.Sailboat: texName = "sailboat"; break;
+                case FeatureType.SulfurSpring: texName = "sulfur_spring"; break;
+            }
 
                 if (string.IsNullOrEmpty(texName)) continue;
 
@@ -670,15 +841,15 @@ public class Playing
                     }
                 }
             }
-        }
 
-        foreach (var other in Others.Values.ToList()) 
-        {   
-            other.Draw(); // Draw other players
-            Debug.DrawHitbox(other.Position);
+        // Render Players - Sorted Top to Bottom (Y-Sorting)
+        var playersToDraw = Others.Values.ToList();
+        playersToDraw.Add(LocalPlayer);
+        foreach (var p in playersToDraw.OrderBy(p => p.Position.Y))
+        {
+            p.Draw();
+            Debug.DrawHitbox(p.Position);
         }
-        LocalPlayer.Draw(); // Draw the local player
-        Debug.DrawHitbox(LocalPlayer.Position);
         
         Cam.End();
 
@@ -718,14 +889,6 @@ public class Playing
         }
 
         DrawChat();
-
-        // Draw Off-hand Shield Slot
-        int swUI = Raylib.GetScreenWidth();
-        int shUI = Raylib.GetScreenHeight();
-        int offHandX = swUI / 2 - 270; // Positioned to the left of the hotbar
-        int offHandY = shUI - 72;
-        
-        Raylib.DrawTexture(AssetManager.GetTexture("hotbar_deactive"), offHandX, offHandY, Color.White);
 
         if (Raylib.IsKeyDown(KeyboardKey.Tab)) DrawPlayerList();
 
@@ -882,10 +1045,30 @@ public class Playing
         }
     }
 
-    private Color GetBiomeBaseColor(byte biome)
+    private Color GetBiomeBaseColor(byte biome, int cx = 0, int cy = 0)
     {
         // OPTIMIZATION: Use a pre-allocated array lookup instead of a switch statement.
-        if (biome < _biomeColors.Length) return _biomeColors[biome];
+        if (biome < _biomeColors.Length)
+        {
+            Color baseCol = _biomeColors[biome];
+            if (biome == 7) // River: shimmer effect with independent rerolling
+            {
+                int hash = (cx * 73856093) ^ (cy * 19349663);
+                float duration = 0.8f + (Math.Abs(hash) % 401 / 1000f); // 0.8s to 1.2s
+                int timeStep = (int)(Raylib.GetTime() / duration);
+                
+                // Mix timeStep into the hash to pick a "new number" every interval
+                int shimmerHash = hash ^ (timeStep * 1103515245);
+                int offset = (Math.Abs(shimmerHash) % 21) - 10; // Range: -10 to +10 brightness
+
+                return new Color(
+                    (byte)Math.Clamp(baseCol.R + offset, 0, 255),
+                    (byte)Math.Clamp(baseCol.G + offset, 0, 255),
+                    (byte)Math.Clamp(baseCol.B + offset, 0, 255),
+                    (byte)255);
+            }
+            return baseCol;
+        }
         return Color.Gray;
     }
 

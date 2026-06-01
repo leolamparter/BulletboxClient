@@ -151,50 +151,74 @@ public class ServerWorld
             int fHash = (chunkX * 73856093) ^ (chunkY * 19349663) ^ Seed;
             int roll = Math.Abs(fHash) % 1000; // Switch to 1000 for finer control
 
-            if (biome == BiomeType.Forest)
+            // Spatial Filtering: Only allow a feature to spawn if it is the "priority winner" 
+            // in a 5-chunk radius. This ensures a minimum of 5 empty chunks between features.
+            bool passesFilter = true;
+            for (int dx = -3; dx <= 3; dx++)
             {
-                if (roll < 25) // 2.5% density
+                for (int dy = -3; dy <= 3; dy++)
                 {
-                    int sub = Math.Abs(fHash >> 8) % 100;
-                    if (sub < 60) chunk.Feature = ServerFeatureType.SmallTree;
-                    else if (sub < 90) chunk.Feature = ServerFeatureType.LargeTree;
-                    else chunk.Feature = ServerFeatureType.Stone;
+                    if (dx == 0 && dy == 0) continue;
+                    int nx = chunkX + dx;
+                    int ny = chunkY + dy;
+                    int nHash = (nx * 73856093) ^ (ny * 19349663) ^ Seed;
+                    int nRoll = Math.Abs(nHash) % 1000;
+
+                    // If any neighbor has a higher priority (lower roll), this chunk loses.
+                    if (nRoll < roll) { passesFilter = false; break; }
+                    // Tie-breaker for identical rolls based on coordinate priority.
+                    if (nRoll == roll && (nx < chunkX || (nx == chunkX && ny < chunkY))) { passesFilter = false; break; }
                 }
+                if (!passesFilter) break;
             }
-            else if (biome == BiomeType.Meadow)
+
+            if (passesFilter)
             {
-                if (roll < 40) // 4% density
+                if (biome == BiomeType.Forest)
                 {
-                    int sub = Math.Abs(fHash >> 8) % 100;
-                    chunk.Feature = (sub < 30) ? ServerFeatureType.MeadowHedge : ServerFeatureType.MeadowFlowers;
+                    if (roll < 50) // 5.0% density
+                    {
+                        int sub = Math.Abs(fHash >> 8) % 100;
+                        if (sub < 60) chunk.Feature = ServerFeatureType.SmallTree;
+                        else if (sub < 90) chunk.Feature = ServerFeatureType.LargeTree;
+                        else chunk.Feature = ServerFeatureType.Stone;
+                    }
                 }
-            }
-            else if (biome == BiomeType.Desert)
-            {
-                if (roll < 15) // 1.5% density
+                else if (biome == BiomeType.Meadow)
                 {
-                    int sub = Math.Abs(fHash >> 8) % 100;
-                    if (sub < 50) chunk.Feature = ServerFeatureType.Tumbleweed;
-                    else if (sub < 85) chunk.Feature = ServerFeatureType.DesertLog;
-                    else if (sub < 95) chunk.Feature = ServerFeatureType.PalmTree;
-                    else chunk.Feature = ServerFeatureType.OasisDesert;
+                    if (roll < 80) // 8% density
+                    {
+                        int sub = Math.Abs(fHash >> 8) % 100;
+                        chunk.Feature = (sub < 30) ? ServerFeatureType.MeadowHedge : ServerFeatureType.MeadowFlowers;
+                    }
                 }
-            }
-            else if (biome == BiomeType.Beach)
-            {
-                if (roll < 10) chunk.Feature = (Math.Abs(fHash >> 8) % 10 < 8) ? ServerFeatureType.PalmTree : ServerFeatureType.BeachUmbrella;
-            }
-            else if (biome == BiomeType.StonyPeaks)
-            {
-                if (roll < 30) chunk.Feature = ServerFeatureType.Stone;
-            }
-            else if (biome == BiomeType.Ocean)
-            {
-                if (roll < 2) chunk.Feature = ServerFeatureType.Sailboat;
-            }
-            else if (biome == BiomeType.BrimstoneSprings)
-            {
-                if (roll < 20) chunk.Feature = (Math.Abs(fHash >> 8) % 10 < 4) ? ServerFeatureType.SulfurSpring : ServerFeatureType.Stone;
+                else if (biome == BiomeType.Desert)
+                {
+                    if (roll < 30) // 3.0% density
+                    {
+                        int sub = Math.Abs(fHash >> 8) % 100;
+                        if (sub < 50) chunk.Feature = ServerFeatureType.Tumbleweed;
+                        else if (sub < 85) chunk.Feature = ServerFeatureType.DesertLog;
+                        else if (sub < 95) chunk.Feature = ServerFeatureType.PalmTree;
+                        else chunk.Feature = ServerFeatureType.OasisDesert;
+                    }
+                }
+                else if (biome == BiomeType.Beach)
+                {
+                    if (roll < 20) chunk.Feature = (Math.Abs(fHash >> 8) % 10 < 8) ? ServerFeatureType.PalmTree : ServerFeatureType.BeachUmbrella;
+                }
+                else if (biome == BiomeType.StonyPeaks)
+                {
+                    if (roll < 60) chunk.Feature = ServerFeatureType.Stone;
+                }
+                else if (biome == BiomeType.Ocean)
+                {
+                    if (roll < 4) chunk.Feature = ServerFeatureType.Sailboat;
+                }
+                else if (biome == BiomeType.BrimstoneSprings)
+                {
+                    if (roll < 40) chunk.Feature = (Math.Abs(fHash >> 8) % 10 < 4) ? ServerFeatureType.SulfurSpring : ServerFeatureType.Stone;
+                }
             }
 
             _chunks[(chunkX, chunkY)] = chunk;

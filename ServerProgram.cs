@@ -55,18 +55,8 @@ public class ServerProgram
                             Vector2 spawnPos = spawnCenter + new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
                             
                             var bot = new RaiderBot($"Raider {rand.Next(1000, 9999)}", spawnPos);                            
-                            int rarityRoll = rand.Next(100); // 0-99
-                            if (rarityRoll < 2) { // 0, 1 (2% chance)
-                                bot.HeldItemID = (byte)'P'; // Spear
-                                bot.AttackCooldown = 0.65f;
-                            } else if (rarityRoll < 10) { // 2-9 (8% chance)
-                                bot.HeldItemID = (byte)'K'; // Kanabo
-                                bot.AttackCooldown = 0.85f;
-                            } else { // 10-99 (90% chance)
-                                bot.HeldItemID = (byte)'S'; // Sword
-                                bot.AttackCooldown = 0.425f;
-                            }
-
+                            bot.HeldItemID = (byte)'S'; // Raiders now only use swords
+                            bot.AttackCooldown = 0.425f;
                             
                             raidInitialMaxHP += bot.MaxHealth;
                             BulletboxWorld.Raiders.Add(bot);
@@ -142,8 +132,8 @@ public class ServerProgram
                     bot.Rotation = (float)(Math.Atan2(dir.Y, dir.X) * (180.0 / Math.PI)) + (MathF.Sin(time * 5f + phase) * 8f);
                     
                     // Dynamic movement based on weapon range
-                    float attackRange = 108f; // 120 * 0.9
-                    if (ServerWeaponStats.Library.TryGetValue(bot.HeldItemID, out var stats)) attackRange = stats.Range * 0.9f;
+                    float attackRange = 96f; // 120 * 0.8
+                    if (ServerWeaponStats.Library.TryGetValue(bot.HeldItemID, out var stats)) attackRange = stats.Range * 0.8f;
 
                     float stopDist = attackRange * 0.85f; // Aim to stay slightly inside the reach
                     

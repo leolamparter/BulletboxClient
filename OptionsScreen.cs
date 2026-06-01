@@ -47,11 +47,13 @@ public class OptionsScreen
         // Update and handle Reload Button
         _reloadButton.Position = new Vector2(centerX, centerY + 140);
         if (_reloadButton.IsClicked()) {
-            AssetManager.UnloadAll();
-            if (Program.PlayingState != null) {
-                Program.PlayingState.LoadAssets();
-            }
-            Console.WriteLine("Textures reloaded from disk.");
+            Program.TriggerSplash(GameState.OPTIONS, () => {
+                AssetManager.UnloadAll();
+                if (Program.PlayingState != null) {
+                    Program.PlayingState.LoadAssets();
+                }
+                Console.WriteLine("Textures reloaded from disk.");
+            });
         }
 
         if (_isDragging)
