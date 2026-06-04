@@ -6,6 +6,9 @@ public class UserData {
     public string Password { get; set; } = "";
     public bool HasLoggedIn { get; set; } = false;
     public float FOV { get; set; } = 1.0f;
+    public bool MovementTutorialFinnished { get; set; } = false;
+    public bool RaidTutorialFinnished { get; set; } = false;
+    public bool RaidCompletedTutorialFinnished { get; set; } = false;
 }
 
 public static class SaveManager {

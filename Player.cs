@@ -103,9 +103,6 @@ public class Player
         string weaponKey = HeldItemID == (byte)'K' ? "kanabo" : (HeldItemID == (byte)'P' ? "spear" : (HeldItemID == (byte)'S' ? "sword" : ""));
         Texture2D weaponTex = !string.IsNullOrEmpty(weaponKey) ? AssetManager.GetTexture(weaponKey) : new Texture2D();
 
-        // 2. Depth Sorting: If pointing 'up' (-20 to -160 degrees), draw weapon behind player
-        bool weaponBehind = Rotation < -20 && Rotation > -160;
-
         void DrawWeapon()
         {   
             if (weaponTex.Id == 0) return;
@@ -156,30 +153,31 @@ public class Player
 
         void DrawOffhand()
         {
-            if (OffHandItemID != (byte)'H') return; // 'H' for Shield
-            Texture2D shieldTex = AssetManager.GetTexture("shield");
-            if (shieldTex.Id == 0) return;
+            if (OffHandItemID == 0 || OffHandItemID == (byte)' ' || OffHandItemID == (byte)'\0') return;
+            
+            ItemStats.Library.TryGetValue(OffHandItemID, out var item);
+            string textureKey = item?.TextureKey ?? "";
+            if (string.IsNullOrEmpty(textureKey)) return;
+            Texture2D tex = AssetManager.GetTexture(textureKey);
+            if (tex.Id == 0) return;
 
-            float scale = IsBlocking ? 1.0f : 0.65f;
-            float radius = IsBlocking ? 30f : 22f;
-            // If blocking, shield is in front. If not, it's tucked to the side (-60 deg offset)
-            float visualRotation = IsBlocking ? Rotation : Rotation - 60f;
-
-            float rad = visualRotation * (MathF.PI / 180f);
+            bool isShield = OffHandItemID == (byte)'H';
+            float scale = (isShield && IsBlocking) ? 1.0f : 0.65f;
+            float radius = (isShield && IsBlocking) ? 30f : 22f;
+            
+            float rad = (Rotation - 45f) * (MathF.PI / 180f);
             Vector2 shieldPos = new Vector2(
                 center.X + MathF.Cos(rad) * radius,
                 center.Y + MathF.Sin(rad) * radius
             );
 
-            Rectangle src = new Rectangle(0, 0, shieldTex.Width, shieldTex.Height);
-            Rectangle dest = new Rectangle(shieldPos.X, shieldPos.Y, shieldTex.Width * scale, shieldTex.Height * scale);
-            Vector2 origin = new Vector2((shieldTex.Width * scale) / 2, (shieldTex.Height * scale) / 2); // Center pivot
-            Raylib.DrawTexturePro(shieldTex, src, dest, origin, visualRotation - 90f, Color.White);
+            Rectangle src = new Rectangle(0, 0, tex.Width, tex.Height);
+            Rectangle dest = new Rectangle(shieldPos.X, shieldPos.Y, tex.Width * scale, tex.Height * scale);
+            Vector2 origin = new Vector2((tex.Width * scale) / 2, (tex.Height * scale) / 2); // Center pivot
+            Raylib.DrawTexturePro(tex, src, dest, origin, Rotation, Color.White);
         }
 
-        // 3. Execution Pass
-        if (weaponBehind) { DrawWeapon(); DrawOffhand(); }
-        
+        // 3. Execution Pass - Draw body first, then items on top
         bool isRaider = Name.StartsWith("Raider");
         if (isRaider)
         {
@@ -209,7 +207,10 @@ public class Player
             Rectangle playerSource = new Rectangle(0, 0, _pixelTarget.Texture.Width, -_pixelTarget.Texture.Height);
             Raylib.DrawTexturePro(_pixelTarget.Texture, playerSource, dest, destOrigin, 0f, Color.White);
         }
-        if (!weaponBehind) { DrawWeapon(); DrawOffhand(); }
+
+        // Always draw items in front of the player body
+        DrawWeapon();
+        DrawOffhand();
     }
 
     public void DrawOverheadHearts(Vector2 worldPos, int health, int max)
@@ -245,9 +246,12 @@ public class Player
         }
 
         // Draw Name Tag
-        int textWidth = Raylib.MeasureText(Name, 20);
-        int xPos = (int)(screenPos.X - (textWidth / 2)); 
-        int yPos = (int)screenPos.Y - 25; // Position above hearts
-        Raylib.DrawText(Name, xPos, yPos, 20, Color.White);
+        if (!Name.StartsWith("Raider"))
+        {
+            int textWidth = Raylib.MeasureText(Name, 20);
+            int xPos = (int)(screenPos.X - (textWidth / 2));
+            int yPos = (int)screenPos.Y - 25; // Position above hearts
+            Raylib.DrawText(Name, xPos, yPos, 20, Color.White);
+        }
     }
 }

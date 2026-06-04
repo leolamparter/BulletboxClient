@@ -17,6 +17,7 @@ public class ServerPlayer
     public string Username = "";
     public int Health = 100;
     public int MaxHealth = 100;
+    public int Hunger = 100;
     public float Rotation = 0f;
     public bool IsBlocking = false;
     public int ViewRadius = 40;
@@ -112,6 +113,17 @@ public class ServerPlayer
                         Writer.Write((byte)chunk.Biome);
                         Writer.Write((byte)chunk.Feature);
                         Writer.Flush();
+
+                        // Send structure data for this chunk if it exists
+                        if (world.Structures.TryGetValue((chunkX, chunkY), out var structure))
+                        {
+                            Writer.Write((byte)12); // Packet ID 12: Structure Data
+                            Writer.Write(structure.ChunkX);
+                            Writer.Write(structure.ChunkY);
+                            Writer.Write((byte)structure.Type);
+                            Writer.Write(structure.Position.X);
+                            Writer.Write(structure.Position.Y);
+                        }
                     }
                 }
                 else if (packetId == 12) // Blocking State
@@ -189,6 +201,20 @@ public class ServerPlayer
                 {
                     string msg = _reader.ReadString();
                     BroadcastChat(Username, msg);
+                }
+                else if (packetId == 15) // Consume Item Request
+                {
+                    byte slot = _reader.ReadByte();
+                    if (slot < 25 && Inventory[slot].ItemID == (byte)'R' && Inventory[slot].Count > 0 && Hunger < 110)
+                    {
+                        Hunger = Math.Min(110, Hunger + 15);
+                        Inventory[slot].Count--;
+                        if (Inventory[slot].Count <= 0)
+                        {
+                            Inventory[slot].ItemID = (byte)' ';
+                            Inventory[slot].Count = 0;
+                        }
+                    }
                 }
             }
         }

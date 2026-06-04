@@ -13,6 +13,10 @@ public class Connection
     public Dictionary<(int, int), byte> ChunkFeatures = new();
     public readonly object ChunkBiomesLock = new();
 
+    // Structure cache
+    public Dictionary<(int, int), Structure> Structures = new();
+    public readonly object StructuresLock = new();
+
         public void SendChunkRequest(int chunkX, int chunkY)
         {
             if (!_isConnected || _writer == null) return;
@@ -185,10 +189,35 @@ public class Connection
                 {
                     byte type = _reader.ReadByte();
                     float val = _reader.ReadSingle();
+                    bool hasOutpostPos = _reader.ReadBoolean(); // Read the new flag
+                    Vector2? outpostPos = null;
+                    if (hasOutpostPos)
+                    {
+                        float outpostX = _reader.ReadSingle();
+                        float outpostY = _reader.ReadSingle();
+                        outpostPos = new Vector2(outpostX, outpostY);
+                    }
+
                     if (Program.PlayingState != null) {
-                        Program.PlayingState.RaidActive = type == 1;
                         if (type == 0) Program.PlayingState.RaidTimer = val;
-                        else Program.PlayingState.RaidBossHealth = val;
+                        else {
+                            Program.PlayingState.RaidBossHealth = val;
+                            Program.PlayingState.RaidActive = val > 0;
+                        }
+                        // Update the fixed outpost position on the client
+                        Program.PlayingState.SetActiveRaidOutpost(outpostPos);
+                    }
+                }
+                else if (packetId == 12) // Structure Data
+                {
+                    int chunkX = _reader.ReadInt32();
+                    int chunkY = _reader.ReadInt32();
+                    StructureType type = (StructureType)_reader.ReadByte();
+                    float posX = _reader.ReadSingle();
+                    float posY = _reader.ReadSingle();
+                    lock (StructuresLock)
+                    {
+                        Structures[(chunkX, chunkY)] = new Structure(new Vector2(posX, posY), type, chunkX, chunkY, "");
                     }
                 }
                 else if (packetId == 14) // Shield Block Sound Trigger
@@ -235,6 +264,18 @@ public class Connection
         try
         {
             _writer.Write((byte)2); // Packet ID 2 for Slot Swapping
+            _writer.Write(slot);
+            _writer.Flush();
+        }
+        catch { _isConnected = false; }
+    }
+
+    public void SendConsumeItem(byte slot)
+    {
+        if (!_isConnected || _writer == null) return;
+        try
+        {
+            _writer.Write((byte)15); // Packet ID 15 for item consumption
             _writer.Write(slot);
             _writer.Flush();
         }
@@ -309,6 +350,13 @@ public class Connection
             _writer?.Close();
             _reader?.Close();
             _client?.Close();
+            
+            // Clear local caches so state is fresh for the next life/connection
+            lock (StructuresLock) Structures.Clear();
+            lock (ChunkBiomesLock) {
+                ChunkBiomes.Clear();
+                ChunkFeatures.Clear();
+            }
             Console.WriteLine("Disconnected from server safely.");
         }
         catch (Exception e)

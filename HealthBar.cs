@@ -4,7 +4,7 @@ using System;
 
 public class HealthBar 
 {
-    public void Draw(int current, int max) 
+    public void Draw(int current, int max, int hunger) 
     {
         if (max <= 0) return;
 
@@ -22,7 +22,7 @@ public class HealthBar
         
         // Positioned above the hotbar
         float startX = (sw - totalWidth) / 2;
-        float startY = sh - 105;
+        float startY = sh - 145; // Moved further up from the hotbar
 
         for (int i = 0; i < totalHearts; i++)
         {
@@ -38,8 +38,33 @@ public class HealthBar
 
             if (tex.Id != 0)
             {
-                Raylib.DrawTextureEx(tex, new Vector2(startX + i * (heartSize + spacing), startY), 0f, heartSize / tex.Width, Color.White);
+                float yOffset = 0;
+                if (percent <= 0.2f)
+                {
+                    // Low health animation: hearts jump up sequentially once every 3 seconds
+                    float time = (float)Raylib.GetTime();
+                    float localTime = time % 3.0f; // Total cycle length (wave + wait)
+                    float angle = localTime * 15f - i * 0.6f;
+
+                    // Only apply offset during one half-period of the sine wave (the jump)
+                    if (angle > 0 && angle < MathF.PI)
+                        yOffset = -MathF.Sin(angle) * 10f; // Negative Y moves hearts UP
+                }
+
+                Raylib.DrawTextureEx(tex, new Vector2(startX + i * (heartSize + spacing), startY + yOffset), 0f, heartSize / tex.Width, Color.White);
             }
+        }
+
+        // Draw Hunger Bar to the right of hearts
+        int rounded = ((hunger + 5) / 10) * 10; // Round to nearest 10
+        Texture2D hungerTex = AssetManager.GetTexture($"hunger_{rounded}");
+        if (hungerTex.Id != 0)
+        {
+            float hungerX = startX + totalWidth + 15; // 15px padding from the last heart
+            float hScale = (heartSize * 2.0f) / hungerTex.Height; // Double the size (2x heart height)
+            // Adjust Y by half the extra size to keep it centered with the hearts
+            float hungerY = startY - (heartSize / 2.0f); 
+            Raylib.DrawTextureEx(hungerTex, new Vector2(hungerX, hungerY), 0f, hScale, Color.White);
         }
 
         // Label

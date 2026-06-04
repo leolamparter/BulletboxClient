@@ -19,15 +19,28 @@ public class InventoryUI {
         if (Raylib.IsMouseButtonReleased(MouseButton.Left) && draggingIndex != -1) {
             int dropTarget = GetSlotUnderMouse();
             if (dropTarget != -1 && dropTarget != draggingIndex) {
-                // Enforce Shield-only rule for slot 24
-                if (dropTarget == 24 && (char)inv.Slots[draggingIndex].ItemID != 'H') {
-                    draggingIndex = -1;
-                    return;
-                }
                 
                 Program.Net.SendMoveItem((byte)draggingIndex, (byte)dropTarget);
             }
             draggingIndex = -1;
+        }
+
+        // Consumption via Right Click
+        if (Raylib.IsMouseButtonPressed(MouseButton.Right)) {
+            int slot = GetSlotUnderMouse();
+            if (slot != -1 && Program.PlayingState != null) {
+                var stack = inv.Slots[slot];
+                if (stack.ItemID == (byte)'R' && Program.PlayingState.CurrentHunger < 110) {
+                    Program.PlayingState.CurrentHunger = Math.Min(110, Program.PlayingState.CurrentHunger + 15);
+                    
+                    // Consume 1 item from the stack
+                    if (inv.Slots[slot].Count > 1) inv.Slots[slot].Count--;
+                    else inv.Slots[slot] = new ItemStack((byte)' ', 0);
+                    
+                    // Notify server of item consumption
+                    Program.Net.SendConsumeItem((byte)slot);
+                }
+            }
         }
     }
 

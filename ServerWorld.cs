@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Numerics;
 
 public enum BiomeType : byte
@@ -79,6 +80,10 @@ public class ServerWorld
     public float RaidTimer = 30f;
     public bool RaidActive = false;
     public List<RaiderBot> Raiders = new();
+    public Vector2? ActiveRaidOutpostPosition = null; // NEW FIELD HERE
+
+    // Storage for world structures like Raid Outposts
+    public ConcurrentDictionary<(int, int), Structure> Structures = new();
 
     // Cache for generated world data
     private Dictionary<(int, int), ServerChunk> _chunks = new();
@@ -222,6 +227,45 @@ public class ServerWorld
             }
 
             _chunks[(chunkX, chunkY)] = chunk;
+
+            // Structure Generation: 0.005% chance per chunk (1 in 20,000)
+            Random rng = new Random(fHash);
+            if (rng.Next(0, 20000) < 1)
+            {
+                // Place a raid outpost at the center of the chunk
+                const int MIN_RAID_OUTPOST_DISTANCE_CHUNKS = 120;
+                bool canPlaceOutpost = true;
+
+                // Ensure outposts don't spawn within 120 chunks of the world origin (spawn)
+                if (Math.Sqrt(chunkX * chunkX + chunkY * chunkY) < 120) canPlaceOutpost = false;
+
+                if (canPlaceOutpost)
+                {
+                    foreach (var existingStructure in Structures.Values)
+                    {
+                        if (existingStructure.Type == StructureType.RaidOutpost)
+                        {
+                            int dx = chunkX - existingStructure.ChunkX;
+                            int dy = chunkY - existingStructure.ChunkY;
+                            double distance = Math.Sqrt(dx * dx + dy * dy);
+
+                            if (distance < MIN_RAID_OUTPOST_DISTANCE_CHUNKS)
+                            {
+                                canPlaceOutpost = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (canPlaceOutpost)
+                {
+                    Vector2 structurePos = new Vector2(chunkX * 16 + 8, chunkY * 16 + 8);
+                    Structure outpost = new Structure(structurePos, StructureType.RaidOutpost, chunkX, chunkY, "");
+                    Structures.TryAdd((chunkX, chunkY), outpost);
+                }
+            }
+
             return chunk;
         }
     }

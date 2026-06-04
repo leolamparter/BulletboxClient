@@ -12,6 +12,7 @@ public class SplashScreen
     private const float FadeOutTime = 1.0f;
     private bool _hasFinished = false;
     private bool _actionExecuted = false;
+    private bool _soundPlayed = false;
     public GameState TargetState = GameState.HOME;
     public Action? LoadingAction;
 
@@ -19,6 +20,7 @@ public class SplashScreen
     {
         // The studio logo is loaded immediately at boot time
         _logo = Raylib.LoadTexture("resources/textures/ui/other/bbstudios.png");
+        AudioManager.LoadSound("textures_loaded", "resources/sounds/ui/textures_loaded.mp3");
     }
 
     public void Reset(GameState nextState, Action? action = null)
@@ -28,6 +30,7 @@ public class SplashScreen
         _timer = 0f;
         _alpha = 0f;
         _actionExecuted = false;
+        _soundPlayed = false;
         _hasFinished = false;
     }
 
@@ -55,6 +58,12 @@ public class SplashScreen
         }
         else if (_timer < FadeInTime + StayTime + FadeOutTime)
         {
+            if (!_soundPlayed)
+            {
+                AudioManager.PlaySound("textures_loaded");
+                _soundPlayed = true;
+            }
+
             _alpha = 1.0f - ((_timer - (FadeInTime + StayTime)) / FadeOutTime);
         }
         else

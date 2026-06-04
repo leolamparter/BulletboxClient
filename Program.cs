@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using Raylib_cs;
+﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
 using System.IO;
@@ -9,21 +9,25 @@ public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, 
 
 class Program
 {
+    public const string VERSION = "Bulletbox 26.1.1 Snapshot 03a";
     public static GameState CurrentState = GameState.SPLASH;
     public static UserData CurrentUser = new UserData(); 
     
     public static Connection Net = new Connection();
-    public static Playing? PlayingState;
-    public static SplashScreen splashScreen;
+    public static Playing? PlayingState; // Made nullable to resolve CS8618
+    public static SplashScreen? splashScreen;
     
     // NEW: Pause State
     public static string LastIP = "127.0.0.1";
     public static int LastPort = 32308;
     public static bool IsPaused = false;
+    private static float _lastAttempt = 0;
 
     public static void TriggerSplash(GameState next, Action? loadingAction = null)
     {
-        splashScreen.Reset(next, loadingAction);
+        CurrentUser = SaveManager.Load();
+        Settings.FOV = CurrentUser.FOV;
+        splashScreen?.Reset(next, loadingAction);
         CurrentState = GameState.SPLASH;
     }
 
@@ -101,6 +105,9 @@ class Program
         DisconnectedScreen disconnectedScreen = new DisconnectedScreen();
         DeathScreen deathScreen = new DeathScreen();
 
+        // Redirect to Login if the user hasn't logged in before, otherwise go to Home.
+        TriggerSplash(CurrentUser.HasLoggedIn ? GameState.HOME : GameState.LOGIN);
+
         // Initialize
         var client = new DiscordRpcClient("1507766634889347295");
         client.Initialize();
@@ -137,30 +144,30 @@ class Program
                     homeScreen.Update();
                     break;
                 case GameState.SINGLEPLAYER_CONNECTING:
-                    // 1. Start the integrated server (it checks if it's already running)
-                    _ = ServerProgram.RunServerAsync();
+                    if (!ServerProgram.IsRunning) _ = ServerProgram.RunServerAsync();
 
-                    // 2. Initialize PlayingState NOW so it's ready for packets
                     if (PlayingState == null)
                     {
                         PlayingState = new Playing(string.IsNullOrEmpty(CurrentUser.Username) ? "Player" : CurrentUser.Username);
                     }
 
-                    LastIP = "127.0.0.1";
-                    LastPort = 32308;
-
-                    // 2. Ensure a fallback username for local play
-                    if (string.IsNullOrEmpty(CurrentUser.Username)) CurrentUser.Username = "Player";
-
-                    // 3. Attempt connection to localhost. Net.Connect handles errors internally.
-                    Net.Connect("127.0.0.1", 32308, CurrentUser.Username, "local_auth");
-
-                    if (Net.IsConnected()) CurrentState = GameState.PLAYING;
-                    else CurrentState = GameState.DISCONNECTED;
+                    if (!Net.IsConnected())
+                    {
+                        // Throttle connection attempts while waiting for the integrated server to start
+                        if (Raylib.GetTime() - _lastAttempt > 1.0)
+                        {
+                            _lastAttempt = (float)Raylib.GetTime();
+                            Net.Connect("127.0.0.1", 32308, string.IsNullOrEmpty(CurrentUser.Username) ? "Player" : CurrentUser.Username, "local_auth");
+                        }
+                    }
+                    else
+                    {
+                        CurrentState = GameState.PLAYING;
+                    }
                     break;
                 case GameState.LOGIN:
                     loginScreen.Update();
-                    if (CurrentUser.HasLoggedIn) CurrentState = GameState.PLAYING;
+                    if (CurrentUser.HasLoggedIn) CurrentState = GameState.HOME;
                     break;
                 case GameState.PLAYING:
                     // Safety: Ensure PlayingState is initialized regardless of how we entered the state
@@ -249,6 +256,14 @@ class Program
                 case GameState.DEATH:
                     deathScreen.Draw();
                     break;
+            }
+
+            if (CurrentState != GameState.PLAYING && CurrentState != GameState.SPLASH)
+            {
+                int sh = Raylib.GetScreenHeight();
+                Color watermarkColor = new Color(180, 180, 180, 255);
+                Raylib.DrawText("Copyright Bulletbox Studios 2026. DO NOT DISTRIBUTE", 10, sh - 30, 18, watermarkColor);
+                Raylib.DrawText(VERSION, 10, sh - 55, 18, watermarkColor);
             }
             Raylib.EndDrawing();
         }

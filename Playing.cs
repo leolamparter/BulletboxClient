@@ -24,6 +24,19 @@ public enum FeatureType
     SulfurSpring
 }
 
+public class DamageParticle
+{
+    public Vector2 Position;
+    public Vector2 Velocity;
+    public float Life;
+    public float MaxLife;
+    public Color ParticleColor;
+    public float Size;
+    public float Rotation;
+    public float AngularVelocity;
+}
+
+// The StructureType enum and Structure class are now in BulletboxClient/Structure.cs
 public class Playing
 {
     // Biome chunk system prototype
@@ -33,11 +46,13 @@ public class Playing
     public Player LocalPlayer;
     public int CurrentHealth = 100;
     public int MaxHealth = 100;
+    public int CurrentHunger = 100;
     public Dictionary<string, Player> Others = new Dictionary<string, Player>();
     public CameraManager Cam;
     public Inventory PlayerInventory = new Inventory();
     public HotbarUI Hotbar;
     public InventoryUI InvMenu;
+    public Dictionary<(int, int), Structure> Structures = new(); 
     private HealthBar healthBar = new HealthBar();
 
     // Optimization Caches
@@ -48,20 +63,16 @@ public class Playing
     private List<(int, int)> _sortedPending = new();
     private int _lastPlayerChunkX = int.MaxValue;
     private int _lastPlayerChunkY = int.MaxValue;
-    private bool _lastRaidActive = false;
-    private float _lastRaidTimer = 0f;
-    private float _lastRaidBossHealth = 0f;
-    private bool _hasPlayedCountdown = false;
-
-    // Death/Kill Tracking
-    private List<string> _lastOtherNames = new();
-    private string _lastAttackedName = "";
-    private float _lastAttackTime = 0f;
 
     // Combat Timers
     private float _cAttackTimer = 0f; 
     private float _cHitTimer = 10f;   
     private int _selectedHotbarIndex = 0;
+    private int _lastLocalHealth = 100;
+    private float _hungerHealTimer = 0f;
+    private Dictionary<string, int> _lastOthersHealth = new();
+    private List<DamageParticle> _damageParticles = new();
+
     private Vector2 _kbVelocity = Vector2.Zero;
     
     // Footstep Sound State
@@ -75,15 +86,34 @@ public class Playing
     private string _chatInput = "";
     private List<(string sender, string msg, float time)> _chatLog = new();
 
-    private List<(Player player, Vector2 screenPos, float rotation)> _playerArrows = new();
+    // Death and Kill Tracking State
+    private List<string> _lastOtherNames = new();
+    private string _lastAttackedName = "";
+    private float _lastAttackTime = 0f;
 
-    // Raid UI State
+    // Raid State (Moved from Structure to Player/Session level)
     public bool RaidActive = false;
-    public float RaidTimer = 0f;
     public float RaidBossHealth = 0f;
+    public float RaidTimer = 9999f;
+    private bool _hasPlayedCountdown = false;
+    private bool _hasPlayedHorn = false;
+    private Vector2? _fixedRaidOutpostPosition = null; // NEW FIELD
+
+    private List<(Player player, Vector2 screenPos, float rotation)> _playerArrows = new();
 
     private int _lastSortX = int.MaxValue;
     private int _lastSortY = int.MaxValue;
+
+    // Movement Tutorial State
+    private bool _showMovementTutorial = false;
+    private bool _tutorialFading = false;
+    private float _tutorialAlpha = 1.0f;
+
+    // Raid Tutorial State
+    private enum RaidTutorialStage { None, InfoMessage, Fading, CompletionMessage, CompletionFading }
+    private RaidTutorialStage _raidTutorialStage = RaidTutorialStage.None;
+    private float _raidTutorialAlpha = 1.0f;
+    private bool _wasRaidActive = false;
 
     private static readonly Color[] _biomeColors = new Color[]
     {
@@ -109,6 +139,7 @@ public class Playing
         Hotbar = new HotbarUI(PlayerInventory);
         InvMenu = new InventoryUI(PlayerInventory);
         LoadAssets();
+        _showMovementTutorial = !Program.CurrentUser.MovementTutorialFinnished;
     }
 
     public void LoadAssets()
@@ -154,6 +185,9 @@ public class Playing
         AssetManager.LoadTexture("heart_half", "resources/textures/ui/health_bar/heart_half.png");
         AssetManager.LoadTexture("heart_half_flash", "resources/textures/ui/health_bar/heart_half_flash.png");
 
+        // Load structure textures
+        AssetManager.LoadTexture("raid_outpost_center", "resources/textures/structure/raidoutpost/center.png");
+
         // Audio
         AudioManager.LoadSound("raid_horn", "resources/sounds/raid/raid_horn.mp3");
         AudioManager.LoadSound("shield_block", "resources/sounds/item/shield/block_1.mp3");
@@ -169,6 +203,11 @@ public class Playing
         AudioManager.LoadSound("player_died", "resources/sounds/player/died.mp3");
         AudioManager.LoadSound("player_kill", "resources/sounds/player/kill.mp3");
 
+        // Load Hunger Bar textures
+        for (int i = 0; i <= 110; i += 10)
+        {
+            AssetManager.LoadTexture($"hunger_{i}", $"resources/textures/ui/hunger_bar/{i}.png");
+        }
 
         if (AssetManager.GetTexture("hotbar_active").Id == 0) Console.WriteLine("ERROR: 'hotbar_active' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_active.png");
         if (AssetManager.GetTexture("hotbar_deactive").Id == 0) Console.WriteLine("ERROR: 'hotbar_deactive' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_deactive.png");
@@ -195,6 +234,13 @@ public class Playing
         bool isMenuOpen = Program.IsPaused || Program.CurrentState == GameState.OPTIONS;
         bool runGameLogic = !isMenuOpen || (Program.Net.IsConnected() && Program.LastIP != "127.0.0.1");
 
+        // Raid Tutorial Trigger (Info Message)
+        if (!RaidActive && RaidTimer <= 3.0f && RaidTimer > 0 && !Program.CurrentUser.RaidTutorialFinnished && _raidTutorialStage == RaidTutorialStage.None)
+        {
+            _raidTutorialStage = RaidTutorialStage.InfoMessage;
+            _raidTutorialAlpha = 1.0f;
+        }
+
         // Always update UI elements that are not directly tied to game world state
         // This ensures chat, inventory, hotbar, and mouse cursor management work even when "paused"
         HotbarUI.HoveredStack = null; // Reset tooltip state for the frame
@@ -213,6 +259,90 @@ public class Playing
         {
             _cAttackTimer += dt;
             _cHitTimer += dt;
+
+            // Passive Healing Logic: 5 HP for 4 Hunger per second
+            _hungerHealTimer += dt;
+            if (_hungerHealTimer >= 1.0f)
+            {
+                _hungerHealTimer -= 1.0f;
+                if (CurrentHealth < MaxHealth && CurrentHunger >= 5)
+                {
+                    CurrentHealth = Math.Min(MaxHealth, CurrentHealth + 5);
+                    CurrentHunger -= 4;
+                }
+            }
+
+            // Hotbar Right-Click Consumption
+            if (Raylib.IsMouseButtonPressed(MouseButton.Right) && !InvMenu.Visible && !_isChatting)
+            {
+                var stack = PlayerInventory.Slots[_selectedHotbarIndex];
+                if (stack.ItemID == (byte)'R' && CurrentHunger < 110)
+                {
+                    CurrentHunger = Math.Min(110, CurrentHunger + 15);
+                    if (stack.Count > 1) PlayerInventory.Slots[_selectedHotbarIndex].Count--;
+                    else PlayerInventory.Slots[_selectedHotbarIndex] = new ItemStack((byte)' ', 0);
+                    Program.Net.SendConsumeItem((byte)_selectedHotbarIndex);
+                }
+            }
+
+            // Movement Tutorial Update
+            if (_showMovementTutorial)
+            {
+                if (!_tutorialFading)
+                {
+                    if (Raylib.IsKeyDown(KeyboardKey.W) || Raylib.IsKeyDown(KeyboardKey.A) || 
+                        Raylib.IsKeyDown(KeyboardKey.S) || Raylib.IsKeyDown(KeyboardKey.D))
+                    {
+                        _tutorialFading = true;
+                    }
+                }
+                else
+                {
+                    _tutorialAlpha -= dt * 0.4f; // Fade out over ~2.5 seconds
+                    if (_tutorialAlpha <= 0)
+                    {
+                        _tutorialAlpha = 0;
+                        _showMovementTutorial = false;
+                        Program.CurrentUser.MovementTutorialFinnished = true;
+                        SaveManager.Save(Program.CurrentUser); // Persist tutorial status immediately
+                    }
+                }
+            }
+
+            // Raid Tutorial Messages & Fade Update
+            if (_raidTutorialStage == RaidTutorialStage.InfoMessage || _raidTutorialStage == RaidTutorialStage.CompletionMessage)
+            {
+                if (Raylib.IsKeyDown(KeyboardKey.W) || Raylib.IsKeyDown(KeyboardKey.A) || 
+                    Raylib.IsKeyDown(KeyboardKey.S) || Raylib.IsKeyDown(KeyboardKey.D))
+                {
+                    if (_raidTutorialStage == RaidTutorialStage.InfoMessage)
+                        _raidTutorialStage = RaidTutorialStage.Fading;
+                    else
+                        _raidTutorialStage = RaidTutorialStage.CompletionFading;
+                }
+            }
+            else if (_raidTutorialStage == RaidTutorialStage.Fading)
+            {
+                _raidTutorialAlpha -= dt * 0.4f;
+                if (_raidTutorialAlpha <= 0)
+                {
+                    _raidTutorialAlpha = 0;
+                    _raidTutorialStage = RaidTutorialStage.None;
+                    Program.CurrentUser.RaidTutorialFinnished = true;
+                    SaveManager.Save(Program.CurrentUser);
+                }
+            }
+            else if (_raidTutorialStage == RaidTutorialStage.CompletionFading)
+            {
+                _raidTutorialAlpha -= dt * 0.4f;
+                if (_raidTutorialAlpha <= 0)
+                {
+                    _raidTutorialAlpha = 0;
+                    _raidTutorialStage = RaidTutorialStage.None;
+                    Program.CurrentUser.RaidCompletedTutorialFinnished = true;
+                    SaveManager.Save(Program.CurrentUser);
+                }
+            }
 
             int targetRadius = Program.GetRequiredChunkRadius();
             bool radiusChanged = targetRadius != ChunkViewRadius;
@@ -280,21 +410,92 @@ public class Playing
                 }
             }
 
-            ProcessPendingBlends();
-
-            // River Shimmer Logic: Separately handle deterministic color "rerolling"
-            foreach (var coord in loadedChunks)
+            // Process incoming structure data from the NetworkManager
+            lock (Program.Net.StructuresLock) // Assuming a lock for structures in Program.Net
             {
-                if (_chunkSnapshot.TryGetValue(coord, out byte b) && b == 7)
+                foreach (var structureEntry in Program.Net.Structures)
                 {
-                    int hash = (coord.Item1 * 73856093) ^ (coord.Item2 * 19349663);
-                    float duration = 0.8f + (Math.Abs(hash) % 401 / 1000f); // 0.8s to 1.2s
-                    double time = Raylib.GetTime();
-
-                    if ((int)(time / duration) != (int)((time - dt) / duration))
-                        _pendingBlends.Add(coord);
+                    var coord = (structureEntry.Value.ChunkX, structureEntry.Value.ChunkY);
+                    if (loadedChunks.Contains(coord) && !Structures.ContainsKey(coord))
+                    {
+                        // Map server-side structure type to client-side texture name
+                        string textureName = "";
+                        switch (structureEntry.Value.Type)
+                        {
+                            case StructureType.RaidOutpost:
+                                textureName = "raid_outpost_center";
+                                break;
+                            default:
+                                textureName = ""; // No texture for unknown types
+                                break;
+                        }
+                        if (!string.IsNullOrEmpty(textureName))
+                        {
+                            Structures.Add(coord, new Structure(structureEntry.Value.Position, structureEntry.Value.Type, structureEntry.Value.ChunkX, structureEntry.Value.ChunkY, textureName));
+                        }
+                    }
                 }
+                // Remove structures that are no longer in loaded chunks
+                var keysToRemove = Structures.Keys.Where(k => !loadedChunks.Contains(k)).ToList();
+                foreach (var key in keysToRemove) Structures.Remove(key);
             }
+
+            // Global Raid Sound Logic
+            if (RaidActive && !_hasPlayedHorn)
+            {
+                AudioManager.PlaySound("raid_horn");
+                _hasPlayedHorn = true;
+            }
+            if (!RaidActive)
+            {
+                _hasPlayedHorn = false; // Reset for next raid
+                if (RaidTimer <= 3.0f && RaidTimer > 0 && !_hasPlayedCountdown)
+                {
+                    AudioManager.PlaySound("raid_countdown");
+                    _hasPlayedCountdown = true;
+                }
+                if (RaidTimer > 3.0f || RaidTimer <= 0) _hasPlayedCountdown = false;
+            }
+
+            if (_wasRaidActive && !RaidActive && RaidBossHealth <= 0 && !Program.CurrentUser.RaidCompletedTutorialFinnished)
+            {
+                _raidTutorialStage = RaidTutorialStage.CompletionMessage;
+                _raidTutorialAlpha = 1.0f;
+            }
+            _wasRaidActive = RaidActive;
+
+            // Damage Splash Detection & Particle Update
+            if (CurrentHealth < _lastLocalHealth) SpawnDamageSplash(LocalPlayer.Position + new Vector2(32, 32));
+            _lastLocalHealth = CurrentHealth;
+
+            foreach (var kvp in Others)
+            {
+                if (!_lastOthersHealth.TryGetValue(kvp.Key, out int lastH)) {
+                    _lastOthersHealth[kvp.Key] = kvp.Value.Health;
+                    continue;
+                }
+                if (kvp.Value.Health < lastH) SpawnDamageSplash(kvp.Value.Position + new Vector2(32, 32));
+                _lastOthersHealth[kvp.Key] = kvp.Value.Health;
+            }
+
+            // Cleanup stale health tracking
+            var staleKeys = _lastOthersHealth.Keys.Where(k => !Others.ContainsKey(k)).ToList();
+            foreach (var k in staleKeys) _lastOthersHealth.Remove(k);
+
+            // Update particles
+            for (int i = _damageParticles.Count - 1; i >= 0; i--)
+            {
+                var p = _damageParticles[i];
+                p.Life -= dt;
+                if (p.Life <= 0) { _damageParticles.RemoveAt(i); continue; }
+                
+                p.Velocity.Y += 1200f * dt; // Strong Gravity
+                p.Position += p.Velocity * dt;
+                p.Rotation += p.AngularVelocity * dt;
+                p.Velocity *= (1.0f - dt * 1.5f); // Slight Air friction
+            }
+
+            ProcessPendingBlends();
 
             // Update Blocking State
             bool wasBlocking = LocalPlayer.IsBlocking;
@@ -304,7 +505,7 @@ public class Playing
             if (LocalPlayer.IsBlocking != wasBlocking) {
                 Program.Net.SendBlockingState(LocalPlayer.IsBlocking);
             }
-
+            
             // Handle Debug inputs
             Debug.Update();
 
@@ -321,7 +522,7 @@ public class Playing
             }
 
             Vector2 lastPos = LocalPlayer.Position;
-
+            
             // Footsteps and Position
             HandleMovement(dt);
 
@@ -329,11 +530,22 @@ public class Playing
             LocalPlayer.Position += _kbVelocity * dt;
             _kbVelocity = Vector2.Lerp(_kbVelocity, Vector2.Zero, dt * 6.5f); // Smooth friction
 
+            // Raid Boundary Enforcement: Clamp player within 120 chunks of the active outpost
+            // Use _fixedRaidOutpostPosition if a raid is active or approaching
+            if ((RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f)) && _fixedRaidOutpostPosition.HasValue)
+            {
+                Vector2 activeOutpostCenter = _fixedRaidOutpostPosition.Value;
+                const float boundaryRadius = 120f * 16f; // 120 Chunks = 1920 Units
+                Vector2 offset = LocalPlayer.Position - activeOutpostCenter;
+                // Only clamp if the player is outside the boundary
+                if (offset.Length() > boundaryRadius)
+                {
+                    // Normalize the offset and scale it to the boundary radius
+                    LocalPlayer.Position = activeOutpostCenter + Vector2.Normalize(offset) * boundaryRadius;
+                }
+            }
 
-
-            // Clear previous arrows
             _playerArrows.Clear();
-
             // Find nearest two players and prepare arrow data
             List<(Player player, float distance)> sortedOthers = new();
             foreach (var other in Others.Values.ToList())
@@ -375,7 +587,7 @@ public class Playing
                     if (dir.X != 0) t = Math.Min(t, halfWidth / MathF.Abs(dir.X));
                     if (dir.Y != 0) t = Math.Min(t, halfHeight / MathF.Abs(dir.Y));
                     
-                    if (t == float.MaxValue) continue; // Should not happen for off-screen players
+                    if (t == float.MaxValue) continue; // Should not happen for off-screen players, but a safety check
 
                     arrowPos = screenCenter + dir * t;
 
@@ -401,7 +613,7 @@ public class Playing
             LocalPlayer.Rotation = (float)(Math.Atan2(mouseWorld.Y - playerCenter.Y, mouseWorld.X - playerCenter.X) * (180.0 / Math.PI));
             LocalPlayer.HeldItemID = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
 
-            // 2. Camera & Network Sync
+            // 2. Camera & Network Sync (always send position for smooth weapon rotation)
             Cam.Update(LocalPlayer.Position, dt);
             Cam.Zoom = Settings.FOV;
 
@@ -409,21 +621,7 @@ public class Playing
             // but we send it every frame for now to ensure other players see smooth weapon rotation
             Program.Net.SendPosition(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Rotation);
         }
-
-        // Detect Raid Start to play SFX
-        if (RaidActive && !_lastRaidActive)
-        {
-            AudioManager.PlaySound("raid_horn");
-            _hasPlayedCountdown = false; // Reset for the next cycle
-        }
-
-        // Raid countdown logic: plays exactly once at 3 seconds left
-        if (!RaidActive && !_hasPlayedCountdown && RaidTimer <= 3.0f && RaidTimer > 0)
-        {
-            AudioManager.PlaySound("raid_countdown");
-            _hasPlayedCountdown = true;
-        }
-
+        
         // --- Global Death/Kill Detection ---
         var currentOtherNames = Others.Keys.ToList();
         foreach (var name in _lastOtherNames)
@@ -437,20 +635,16 @@ public class Playing
                 if (name == _lastAttackedName && (float)Raylib.GetTime() - _lastAttackTime < 1.5f)
                 {
                     AudioManager.PlaySound("player_kill"); // kill.mp3
-                }
+                } 
             }
         }
         _lastOtherNames = currentOtherNames;
 
-        // Global Death Trigger: Plays when the Raid Encounter dies
-        if (RaidActive && _lastRaidBossHealth > 0 && RaidBossHealth <= 0)
-        {
-            AudioManager.PlaySound("player_death");
-        }
+    }
 
-        _lastRaidBossHealth = RaidBossHealth;
-        _lastRaidTimer = RaidTimer;
-        _lastRaidActive = RaidActive;
+    public void SetActiveRaidOutpost(Vector2? outpostPos)
+    {
+        _fixedRaidOutpostPosition = outpostPos;
     }
 
     private void HandleChatInput()
@@ -467,7 +661,7 @@ public class Playing
             int key = Raylib.GetCharPressed();
             while (key > 0)
             {
-                if (key >= 32 && key <= 125 && _chatInput.Length < 50) _chatInput += (char)key;
+                if (key >= 32 && key <= 125 && _chatInput.Length < 50) _chatInput += (char)key; // Max 50 chars
                 key = Raylib.GetCharPressed();
             }
 
@@ -478,7 +672,32 @@ public class Playing
                     Program.Net.SendChat(_chatInput);
                 _isChatting = false;
             }
-            if (Raylib.IsKeyPressed(KeyboardKey.Escape)) _isChatting = false;
+            if (Raylib.IsKeyPressed(KeyboardKey.Escape)) _isChatting = false; // Close chat on escape
+        }
+    }
+
+    private void SpawnDamageSplash(Vector2 pos)
+    {
+        Random r = new Random();
+        int count = r.Next(35, 50); // Massive particle burst
+        for (int i = 0; i < count; i++)
+        {
+            float angle = (float)(r.NextDouble() * Math.PI * 2);
+            float speed = (float)(r.NextDouble() * 500 + 100);
+            float life = (float)(r.NextDouble() * 0.3f + 0.2f);
+
+            int redVal = r.Next(130, 230); // Richer red tones
+
+            _damageParticles.Add(new DamageParticle {
+                Position = pos,
+                Velocity = new Vector2(MathF.Cos(angle) * speed, MathF.Sin(angle) * speed),
+                Life = life,
+                MaxLife = life,
+                ParticleColor = new Color(redVal, 0, 0, 255),
+                Size = (float)(r.NextDouble() * 6 + 3),
+                Rotation = (float)(r.NextDouble() * 360),
+                AngularVelocity = (float)(r.NextDouble() * 800 - 400)
+            });
         }
     }
 
@@ -495,7 +714,7 @@ public class Playing
 
         if (direction.X < 0) LocalPlayer.FacingRight = false;
         else if (direction.X > 0) LocalPlayer.FacingRight = true;
-
+        
         if (direction != Vector2.Zero)
         {
             // Normalize ensures that diagonal movement is not faster than cardinal movement
@@ -509,7 +728,7 @@ public class Playing
         // Lookup biome with fallback to network cache if snapshot isn't ready
         byte biome = 0;
         bool hasBiome = _chunkSnapshot.TryGetValue((cx, cy), out biome);
-        if (!hasBiome)
+        if (!hasBiome) // Fallback if snapshot not yet populated
         {
             lock (Program.Net.ChunkBiomesLock)
             {
@@ -528,7 +747,7 @@ public class Playing
                 4 => "river", // Ocean fallback
                 5 => "beach",
                 6 => "stonypeaks", // Brimstone fallback
-                7 => "river",
+                7 => "river", // River
                 _ => ""
             };
         }
@@ -536,7 +755,7 @@ public class Playing
         bool isMoving = direction != Vector2.Zero;
         bool shouldPlay = isMoving && !string.IsNullOrEmpty(targetFootstep) && !Program.IsPaused;
 
-        // Crossfade logic: if the target changed, move current to fading
+        // Crossfade logic: if the target changed, move current to fading, and start new
         if (shouldPlay && _currentFootstepKey != targetFootstep)
         {
             if (!string.IsNullOrEmpty(_fadingFootstepKey)) AudioManager.StopSound(_fadingFootstepKey);
@@ -546,7 +765,7 @@ public class Playing
             _footstepVolume = 0f;
         }
 
-        if (shouldPlay) _footstepVolume = Math.Min(_footstepVolume + dt * 5f, 1.0f);
+        if (shouldPlay) _footstepVolume = Math.Min(_footstepVolume + dt * 5f, 1.0f); // Fade in
         else _footstepVolume = Math.Max(_footstepVolume - dt * 5f, 0.0f);
 
         if (!string.IsNullOrEmpty(_fadingFootstepKey))
@@ -554,7 +773,7 @@ public class Playing
 
         if (!string.IsNullOrEmpty(_currentFootstepKey))
         {
-            if (_footstepVolume <= 0 && !shouldPlay)
+            if (_footstepVolume <= 0 && !shouldPlay) // Stop if faded out and not playing
             {
                 AudioManager.StopSound(_currentFootstepKey);
                 _currentFootstepKey = "";
@@ -564,7 +783,7 @@ public class Playing
                 AudioManager.SetVolume(_currentFootstepKey, _footstepVolume);
                 AudioManager.PlaySound(_currentFootstepKey);
             }
-            else if (AudioManager.IsSoundPlaying(_currentFootstepKey))
+            else if (AudioManager.IsSoundPlaying(_currentFootstepKey)) // Update volume if already playing
             {
                 AudioManager.SetVolume(_currentFootstepKey, _footstepVolume);
             }
@@ -573,7 +792,7 @@ public class Playing
         if (!string.IsNullOrEmpty(_fadingFootstepKey))
         {
             if (_fadingFootstepVolume > 0)
-            {
+            { // Continue fading out
                 if (AudioManager.IsSoundPlaying(_fadingFootstepKey))
                     AudioManager.SetVolume(_fadingFootstepKey, _fadingFootstepVolume);
             }
@@ -590,7 +809,7 @@ public class Playing
         if (_pendingBlends.Count == 0 && _sortedPending.Count == 0)
         {
             return;
-        }
+        } 
 
         // OPTIMIZATION: Only re-sort the entire queue when the player moves to a new chunk.
         if (_lastPlayerChunkX != _lastSortX || _lastPlayerChunkY != _lastSortY)
@@ -624,7 +843,7 @@ public class Playing
             _pendingBlends.Clear();
         }
 
-        const int limit = 200; 
+        const int limit = 200; // Process up to 200 blends per frame
         int processed = 0;
 
         // Process items from the front of the sorted list (closest to player)
@@ -632,7 +851,7 @@ public class Playing
         {
             var pos = _sortedPending[i];
             processed++;
-            
+
             if (!_chunkSnapshot.TryGetValue(pos, out byte myBiome)) {
                 continue;
             }
@@ -644,7 +863,7 @@ public class Playing
         // Remove the processed batch from the work queue
         if (processed > 0)
         {
-            _sortedPending.RemoveRange(0, processed);
+            _sortedPending.RemoveRange(0, processed); 
         }
     }
 
@@ -653,7 +872,7 @@ public class Playing
         Color baseCol = GetBiomeBaseColor(myBiome, cx, cy);
         if (myBiome == 7) return baseCol; // Rivers stay sharp
 
-        // OPTIMIZATION: Homogeneity Check. 
+        // OPTIMIZATION: Homogeneity Check.
         // If all 8 immediate neighbors are the same biome, skip the heavy blending math.
         bool isUniform = true;
         for (int dx = -1; dx <= 1; dx++) {
@@ -684,23 +903,23 @@ public class Playing
             }
         }
 
-        // OPTIMIZATION: Bake the Brimstone Spring (Biome 6) tint directly into the blended color.
+        // OPTIMIZATION: Bake the Brimstone Spring (Biome 6) tint directly into the blended color. 
         // This removes the need for a second DrawRectangle call for these chunks in the render loop.
         if (myBiome == 6)
         {
             float r = (rSum / wSum) * 0.85f + 255 * 0.15f;
             float g = (gSum / wSum) * 0.85f + 180 * 0.15f;
             float b = (bSum / wSum) * 0.85f + 100 * 0.15f;
-            return new Color((byte)r, (byte)g, (byte)b, (byte)255);
+            return new Color((int)r, (int)g, (int)b, 255);
         }
 
-        return new Color((byte)(rSum / wSum), (byte)(gSum / wSum), (byte)(bSum / wSum), (byte)255);
+        return new Color((int)(rSum / wSum), (int)(gSum / wSum), (int)(bSum / wSum), 255);
     }
 
     private void HandleCombat()
     {
         if (Raylib.IsMouseButtonPressed(MouseButton.Left) && !InvMenu.Visible) 
-        {
+        { // Only attack if inventory is not open
             byte heldId = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
             var (dmg, kb, range) = WeaponStats.Calculate(heldId, _cAttackTimer, _cHitTimer);
 
@@ -722,7 +941,7 @@ public class Playing
                         _lastAttackedName = other.Name;
                         Program.Net.SendAttack(other.Name);
                         
-                        _cAttackTimer = 0;
+                        _cAttackTimer = 0; // Reset attack cooldown
                         _cHitTimer = 0;
                         break; 
                     }
@@ -730,7 +949,7 @@ public class Playing
             }
             else 
             {
-                _cAttackTimer = 0;
+                _cAttackTimer = 0; // Still reset if no damage, to prevent spamming
             }
         }
     }
@@ -758,6 +977,36 @@ public class Playing
                 if (_chunkSnapshot.TryGetValue(coord, out byte b)) drawColor = GetBiomeBaseColor(b, coord.Item1, coord.Item2); else continue;
 
             Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, drawColor);
+        }
+
+        // Draw Structures
+        foreach (var structureEntry in Structures)
+        {
+            var structure = structureEntry.Value;
+            var tex = AssetManager.GetTexture(structure.TextureName);
+            if (tex.Id != 0)
+            {
+                // Structures are centered on their chunk, so position is already center.
+                // Need to adjust for texture origin to draw correctly.
+                // Assuming structure texture is 64x64, and chunk is 16x16.
+                // Structure position is (chunkX * 16 + 8, chunkY * 16 + 8).
+                // To draw centered, subtract half texture width/height.
+                Raylib.DrawTexture(
+                    tex,
+                    (int)(structure.Position.X - tex.Width / 2),
+                    (int)(structure.Position.Y - tex.Height / 2),
+                    Color.White
+                );
+            }
+        }
+
+        // Draw Raid Boundary Visuals (Red forcefield ring)
+        if ((RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f)) && _fixedRaidOutpostPosition.HasValue)
+        {
+            Vector2 activeOutpostCenter = _fixedRaidOutpostPosition.Value;
+            const float boundaryRadius = 120f * 16f; // 120 Chunks = 1920 Units
+            const float thickness = 10f; // Desired line thickness
+            Raylib.DrawRing(activeOutpostCenter, boundaryRadius - thickness / 2, boundaryRadius + thickness / 2, 0, 360, 360, new Color(255, 0, 0, 180));
         }
 
         // Feature Pass - Rendered Top to Bottom (Y-Sorting) for correct overlap
@@ -850,10 +1099,55 @@ public class Playing
             p.Draw();
             Debug.DrawHitbox(p.Position);
         }
-        
+
+        // Draw Damage Splashes
+        foreach (var p in _damageParticles)
+        {
+            float t = p.Life / p.MaxLife;
+            float currentSize = p.Size * MathF.Pow(t, 0.5f); // Shrink slightly over time
+
+            // Pixelation: Snap position and size to a 2x2 or 4x4 virtual pixel grid
+            float pSize = 4f; 
+            Vector2 drawPos = new Vector2(MathF.Round(p.Position.X / pSize) * pSize, MathF.Round(p.Position.Y / pSize) * pSize);
+            float s = MathF.Max(pSize, MathF.Round(currentSize / pSize) * pSize);
+            
+            // Layer 1: Dark outer "goo" / Shadow (offset by 1 virtual pixel)
+            Raylib.DrawRectangleV(drawPos + new Vector2(pSize, pSize), new Vector2(s, s), new Color(40, 0, 0, (int)(t * 180)));
+            
+            // Layer 2: Core vibrant blood color
+            Raylib.DrawRectangleV(drawPos, new Vector2(s, s), new Color((int)p.ParticleColor.R, 0, 0, (int)(t * 255)));
+            
+            // Layer 3: Specular highlight (top-left virtual pixel)
+            float hSize = MathF.Max(pSize, s * 0.5f);
+            Raylib.DrawRectangleV(drawPos, new Vector2(hSize, hSize), new Color(255, 100, 100, (int)(t * 150)));
+        }
+
         Cam.End();
 
         // UI Overlay Pass (Draw after Cam.End to be in true Screen Space)
+        float healthPercent = CurrentHealth / (float)MaxHealth;
+        float time = (float)Raylib.GetTime();
+        
+        // Always present health-based vignette, but use a power curve so it's very faint at high health
+        float healthIntensity = MathF.Pow(1.0f - healthPercent, 2.0f);
+        
+        // Light base intensity if a raid is active or approaching
+        bool raidOngoing = RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f);
+        float raidIntensity = raidOngoing ? 0.12f : 0.0f;
+
+        // Pulse effect (throbbing intensity)
+        float pulse = MathF.Sin(time * 4.0f) * 0.2f + 0.8f;
+        float totalIntensity = Math.Clamp(healthIntensity + raidIntensity, 0f, 1.0f);
+
+        if (totalIntensity > 0.01f)
+        {
+            int sw = Raylib.GetScreenWidth();
+            int sh = Raylib.GetScreenHeight();
+            float radius = MathF.Sqrt(sw * sw + sh * sh) * 0.5f;
+            int alpha = (int)(totalIntensity * pulse * 180);
+            Raylib.DrawCircleGradient(sw / 2, sh / 2, radius, new Color(255, 0, 0, 0), new Color(255, 0, 0, Math.Clamp(alpha, 0, 255)));
+        }
+
         foreach (var other in Others.Values)
         {
             other.DrawOverheadHearts(other.Position + new Vector2(32, 32), other.Health, other.MaxHealth);
@@ -892,40 +1186,76 @@ public class Playing
 
         if (Raylib.IsKeyDown(KeyboardKey.Tab)) DrawPlayerList();
 
-        healthBar.Draw(CurrentHealth, MaxHealth);
+        healthBar.Draw(CurrentHealth, MaxHealth, CurrentHunger);
         Hotbar.Draw();
 
-        
-        // Draw Raid UI
-        int sw = Raylib.GetScreenWidth();
-        if (!RaidActive) {
-            string timerText = $"Next Raid in {(int)RaidTimer}s";
-            int tw = Raylib.MeasureText(timerText, 25);
-            Raylib.DrawText(timerText, sw / 2 - tw / 2, 20, 25, Color.White);
-        } else {
-            int barW = 400, barH = 20;
+
+        // Draw Global Raid UI
+        if (RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f))
+        {
+            int sw = Raylib.GetScreenWidth();
+            int barW = 400, barH = 24;
             int x = sw / 2 - barW / 2;
-            
-            // Draw Glow
-            Raylib.DrawRectangleRounded(new Rectangle(x - 4, 36, barW + 8, barH + 8), 0.5f, 4, new Color(255, 80, 0, 40));
-            Raylib.DrawRectangleRounded(new Rectangle(x - 2, 38, barW + 4, barH + 4), 0.5f, 4, new Color(255, 80, 0, 80));
-            
-            // Bar Background
-            Raylib.DrawRectangleRounded(new Rectangle(x, 40, barW, barH), 0.5f, 4, new Color(40, 40, 40, 200));
-            
-            // Bar Fill
-            float fillWidth = barW * RaidBossHealth;
-            if (fillWidth > 5) // Only draw fill if there's health to prevent rounding artifacts
-                Raylib.DrawRectangleRounded(new Rectangle(x, 40, fillWidth, barH), 0.5f, 4, new Color(255, 80, 0, 255));
+            int y = 45; // Fixed top-center position
+
+            // Draw Boss Bar Background (Glow + Inner)
+            Raylib.DrawRectangleRounded(new Rectangle(x - 4, y - 4, barW + 8, barH + 8), 0.5f, 4, new Color(255, 80, 0, 40));
+            Raylib.DrawRectangleRounded(new Rectangle(x, y, barW, barH), 0.5f, 4, new Color(20, 20, 20, 200));
+
+            // Draw Health Fill
+            // If active, show boss HP. If approaching, fill bar based on 3s countdown progress.
+            float fillRatio = RaidActive ? RaidBossHealth : Math.Clamp(1.0f - (RaidTimer / 3.0f), 0, 1);
+            float fillWidth = barW * fillRatio;
+            if (fillWidth > 2)
+                Raylib.DrawRectangleRounded(new Rectangle(x, y, fillWidth, barH), 0.5f, 4, new Color(255, 80, 0, 255));
                 
-            Raylib.DrawRectangleRoundedLines(new Rectangle(x, 40, barW, barH), 0.5f, 4, Color.Black);
-            Raylib.DrawText("RAID ENCOUNTER", sw / 2 - 80, 15, 20, new Color(255, 200, 0, 255));
+            Raylib.DrawRectangleRoundedLines(new Rectangle(x, y, barW, barH), 0.5f, 4, Color.Black);
+            
+            string raidTitle = RaidActive ? "RAID ENCOUNTER" : "RAID APPROACHING...";
+            int tw = Raylib.MeasureText(raidTitle, 22);
+            Raylib.DrawText(raidTitle, sw / 2 - tw / 2, y - 28, 22, new Color(255, 200, 0, 255));
         }
 
-        
         // UI Visual for Cooldown (Optional, helps testing)
         DrawCooldownUI();
+
+        // Movement Tutorial Overlay
+        if (_showMovementTutorial)
+        {
+            int sw = Raylib.GetScreenWidth();
+            int sh = Raylib.GetScreenHeight();
+            string tutText = "Use the W, A, S, and D keys to move";
+            int tutFontSize = 40;
+            int tutTextWidth = Raylib.MeasureText(tutText, tutFontSize);
+
+            // Semi-transparent black background bar
+            Raylib.DrawRectangle(0, sh / 2 - 60, sw, 120, new Color(0, 0, 0, (int)(160 * _tutorialAlpha)));
+            // Big white text
+            Raylib.DrawText(tutText, sw / 2 - tutTextWidth / 2, sh / 2 - 20, tutFontSize, new Color(255, 255, 255, (int)(255 * _tutorialAlpha)));
+        }
         
+        // Raid Tutorial Overlay
+        if (_raidTutorialStage != RaidTutorialStage.None)
+        {
+            int sw = Raylib.GetScreenWidth();
+            int sh = Raylib.GetScreenHeight();
+
+            string tutText = "";
+            if (_raidTutorialStage == RaidTutorialStage.InfoMessage || _raidTutorialStage == RaidTutorialStage.Fading)
+                tutText = "This is a raid. Fight off the raiders by their outpost to win.";
+            else if (_raidTutorialStage == RaidTutorialStage.CompletionMessage || _raidTutorialStage == RaidTutorialStage.CompletionFading)
+                tutText = "You completed your first raid! Good Job!";
+
+            int tutFontSize = 30;
+            int tutTextWidth = Raylib.MeasureText(tutText, tutFontSize);
+            float alpha = _raidTutorialAlpha;
+
+            // Semi-transparent black background bar
+            Raylib.DrawRectangle(0, sh / 2 - 60, sw, 120, new Color(0, 0, 0, (int)(160 * alpha)));
+            // Big white text
+            Raylib.DrawText(tutText, sw / 2 - tutTextWidth / 2, sh / 2 - 15, tutFontSize, new Color(255, 255, 255, (int)(255 * alpha)));
+        }
+
         InvMenu.Draw();
 
         // Draw Dynamic Crosshair
@@ -951,7 +1281,7 @@ public class Playing
             // Simple luminosity check (0.299R + 0.587G + 0.114B)
             float lum = (bgColor.R * 0.299f + bgColor.G * 0.587f + bgColor.B * 0.114f);
             
-            // If background is bright, make crosshair darker; if dark, make it brighter.
+            // If background is bright, make crosshair darker; if dark, make it brighter for contrast.
             if (lum > 140) crossColor = Raylib.ColorBrightness(crossColor, -0.3f);
             else crossColor = Raylib.ColorBrightness(crossColor, 0.2f);
 
@@ -976,7 +1306,7 @@ public class Playing
         int spacing = 22;
         int anchorY = sh - 80; // The Y-position for the most recent message
 
-        int displayedCount = 0;
+        int displayedCount = 0; // Track how many messages are drawn
         // Iterate through the log backwards to keep the newest message at the bottom
         for (int i = _chatLog.Count - 1; i >= 0; i--)
         {
@@ -984,7 +1314,7 @@ public class Playing
 
             var entry = _chatLog[i];
             float age = currentTime - entry.time;
-
+            
             if (!_isChatting && age > 15.0f) continue;
 
             // Calculate fade alpha (stays 1.0 until 13s, then fades to 0 over the next 2s)
@@ -996,8 +1326,8 @@ public class Playing
             int yPos = anchorY - (displayedCount * spacing);
 
             // Draw Minecraft-style semi-transparent background and text
-            Raylib.DrawRectangle(10, yPos - 2, textWidth + 20, fontSize + 4, new Color((byte)40, (byte)40, (byte)40, (byte)(160 * alpha)));
-            Raylib.DrawText(text, 20, yPos, fontSize, new Color((byte)255, (byte)255, (byte)255, (byte)(255 * alpha)));
+            Raylib.DrawRectangle(10, yPos - 2, textWidth + 20, fontSize + 4, new Color(40, 40, 40, (int)(160 * alpha)));
+            Raylib.DrawText(text, 20, yPos, fontSize, new Color(255, 255, 255, (int)(255 * alpha)));
 
             displayedCount++;
         }
@@ -1013,7 +1343,7 @@ public class Playing
     {
         var players = Others.Values.ToList();
         players.Add(LocalPlayer);
-        
+
         // Show up to 30 nearest players
         var sorted = players.OrderBy(p => Vector2.Distance(LocalPlayer.Position, p.Position)).Take(30).ToList();
 
@@ -1027,7 +1357,7 @@ public class Playing
             int col = i / 10;
             int row = i % 10;
             int x = sw / 2 - 270 + (col * 200);
-            int y = sh / 2 - 140 + (row * 30);
+            int y = sh / 2 - 140 + (row * 30); // Vertical spacing
             
             Color nameCol = (sorted[i] == LocalPlayer) ? Color.SkyBlue : Color.White;
             Raylib.DrawText(sorted[i].Name, x, y, 20, nameCol);
@@ -1036,19 +1366,30 @@ public class Playing
 
     private void DrawCooldownUI()
     {
+        if (InvMenu.Visible || Program.IsPaused || _isChatting) return;
+
         byte heldId = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
         if (WeaponStats.Library.TryGetValue(heldId, out var stats))
         {
             float charge = Math.Clamp(_cAttackTimer / stats.Cooldown, 0, 1);
             Color barColor = charge < 0.35f ? Color.Red : Color.Green;
-            Raylib.DrawRectangle(10, Raylib.GetScreenHeight() - 20, (int)(100 * charge), 10, barColor);
+
+            Vector2 mousePos = Raylib.GetMousePosition();
+            int barWidth = 40;
+            int barHeight = 4;
+            int x = (int)mousePos.X - (barWidth / 2);
+            int y = (int)mousePos.Y + 16; // Positioned below the crosshair
+
+            // Draw small background for contrast
+            Raylib.DrawRectangle(x - 1, y - 1, barWidth + 2, barHeight + 2, new Color(0, 0, 0, 120));
+            Raylib.DrawRectangle(x, y, (int)(barWidth * charge), barHeight, barColor);
         }
     }
 
     private Color GetBiomeBaseColor(byte biome, int cx = 0, int cy = 0)
     {
         // OPTIMIZATION: Use a pre-allocated array lookup instead of a switch statement.
-        if (biome < _biomeColors.Length)
+        if (biome < _biomeColors.Length) // Ensure biome index is valid
         {
             Color baseCol = _biomeColors[biome];
             if (biome == 7) // River: shimmer effect with independent rerolling
@@ -1056,16 +1397,16 @@ public class Playing
                 int hash = (cx * 73856093) ^ (cy * 19349663);
                 float duration = 0.8f + (Math.Abs(hash) % 401 / 1000f); // 0.8s to 1.2s
                 int timeStep = (int)(Raylib.GetTime() / duration);
-                
+
                 // Mix timeStep into the hash to pick a "new number" every interval
                 int shimmerHash = hash ^ (timeStep * 1103515245);
                 int offset = (Math.Abs(shimmerHash) % 21) - 10; // Range: -10 to +10 brightness
 
                 return new Color(
-                    (byte)Math.Clamp(baseCol.R + offset, 0, 255),
-                    (byte)Math.Clamp(baseCol.G + offset, 0, 255),
-                    (byte)Math.Clamp(baseCol.B + offset, 0, 255),
-                    (byte)255);
+                    (int)Math.Clamp(baseCol.R + offset, 0, 255),
+                    (int)Math.Clamp(baseCol.G + offset, 0, 255),
+                    (int)Math.Clamp(baseCol.B + offset, 0, 255),
+                    255);
             }
             return baseCol;
         }
@@ -1079,7 +1420,7 @@ public class Playing
         {
             r += c.R; g += c.G; b += c.B; a += c.A;
         }
-        return new Color(
+        return new Color( // Average the color components
             (byte)(r / colors.Length), 
             (byte)(g / colors.Length), 
             (byte)(b / colors.Length), 
