@@ -1,11 +1,12 @@
 using Raylib_cs;
 using System.Numerics;
 using System.Collections.Generic;
+using BulletboxClient;
 
 public class HomeScreen
 {
     private List<UIButton> buttons;
-    public static GameOfLife background = new GameOfLife();
+    public static WorldBackground background = new WorldBackground();
     private string title = "BULLETBOX";
 
     public void DrawBackgroundOnly() 
@@ -15,7 +16,7 @@ public class HomeScreen
 
     public HomeScreen()
     {
-        background = new GameOfLife();
+        background = new WorldBackground();
         buttons = new List<UIButton>();
 
         // We initialize with dummy positions; Draw() will position them correctly

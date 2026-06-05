@@ -9,7 +9,7 @@ public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, 
 
 class Program
 {
-    public const string VERSION = "Bulletbox 26.1.1 Snapshot 03a";
+    public const string VERSION = "Bulletbox 26.1.1 Snapshot 03b";
     public static GameState CurrentState = GameState.SPLASH;
     public static UserData CurrentUser = new UserData(); 
     
@@ -245,6 +245,7 @@ class Program
                     break;
                 case GameState.OPTIONS:
                     if (cameFrom == GameState.PLAYING) PlayingState?.Draw();
+                    else if (cameFrom == GameState.HOME) HomeScreen.background.Draw();
                     optionsScreen.Draw();
                     break;
                 case GameState.FRIENDS:

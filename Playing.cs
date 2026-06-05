@@ -36,6 +36,24 @@ public class DamageParticle
     public float AngularVelocity;
 }
 
+public class CloudParticle
+{
+    public Vector2 Position;
+    public Vector2 Velocity;
+    public float Life;
+    public float MaxLife;
+    public float Size;
+    public float Rotation;
+    public float Alpha;
+}
+
+public class ShootingStar
+{
+    public Vector2 Position;
+    public Vector2 Velocity;
+    public float Life;
+}
+
 // The StructureType enum and Structure class are now in BulletboxClient/Structure.cs
 public class Playing
 {
@@ -54,6 +72,18 @@ public class Playing
     public InventoryUI InvMenu;
     public Dictionary<(int, int), Structure> Structures = new(); 
     private HealthBar healthBar = new HealthBar();
+
+    // Environmental Systems
+    public WorldEnvironment Env = new WorldEnvironment();
+    private Shader _lightShader;
+    private Shader _postShader;
+    private RenderTexture2D _sceneTarget;
+    private RenderTexture2D _lightingTarget;
+    private List<Vector2> _rainParticles = new();
+    private List<Vector2> _dustParticles = new();
+    private List<Vector2> _moteParticles = new();
+    private List<CloudParticle> _cloudParticles = new();
+    private List<ShootingStar> _shootingStars = new();
 
     // Optimization Caches
     private Dictionary<(int, int), byte> _chunkSnapshot = new();
@@ -89,6 +119,7 @@ public class Playing
     // Death and Kill Tracking State
     private List<string> _lastOtherNames = new();
     private string _lastAttackedName = "";
+    private Dictionary<string, Vector2> _lastOtherPositions = new();
     private float _lastAttackTime = 0f;
 
     // Raid State (Moved from Structure to Player/Session level)
@@ -139,6 +170,18 @@ public class Playing
         Hotbar = new HotbarUI(PlayerInventory);
         InvMenu = new InventoryUI(PlayerInventory);
         LoadAssets();
+
+        // Initialize Shaders and Targets
+        _lightShader = Raylib.LoadShader(null, "resources/shaders/lighting.fs");
+        _postShader = Raylib.LoadShader(null, "resources/shaders/post_process.fs");
+        _sceneTarget = Raylib.LoadRenderTexture(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+        _lightingTarget = Raylib.LoadRenderTexture(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+        InitializeWeatherParticles();
+
+        // Initial shader uniform setup
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, "screenResolution"), 
+            new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), ShaderUniformDataType.Vec2);
+
         _showMovementTutorial = !Program.CurrentUser.MovementTutorialFinnished;
     }
 
@@ -212,6 +255,70 @@ public class Playing
         if (AssetManager.GetTexture("hotbar_active").Id == 0) Console.WriteLine("ERROR: 'hotbar_active' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_active.png");
         if (AssetManager.GetTexture("hotbar_deactive").Id == 0) Console.WriteLine("ERROR: 'hotbar_deactive' texture failed to load! Check path: resources/textures/ui/inventory/hotbar_deactive.png");
     }
+    
+    private void InitializeWeatherParticles()
+    {
+        Random r = new Random();
+        for(int i=0; i<200; i++) _rainParticles.Add(new Vector2(r.Next(0, 2000), r.Next(0, 2000)));
+        for(int i=0; i<300; i++) _dustParticles.Add(new Vector2(r.Next(0, 2000), r.Next(0, 2000))); // Increased dust particles
+        for(int i=0; i<250; i++) _moteParticles.Add(new Vector2(r.Next(0, 2000), r.Next(0, 2000))); // Increased mote count
+    }
+
+    private void UpdateWeatherParticles(float dt)
+
+    {
+        float rainInt = Env.GetWeatherIntensity(WeatherType.Rain);
+        float dustInt = Env.GetWeatherIntensity(WeatherType.DustStorm);
+        
+        for (int i=0; i<_rainParticles.Count; i++)
+            _rainParticles[i] = new Vector2((_rainParticles[i].X + 100 * dt) % Raylib.GetScreenWidth(), (_rainParticles[i].Y + 800 * dt) % Raylib.GetScreenHeight());
+        for (int i=0; i<_dustParticles.Count; i++)
+            _dustParticles[i] = new Vector2((_dustParticles[i].X + 400 * dt) % Raylib.GetScreenWidth(), (_dustParticles[i].Y + 50 * dt) % Raylib.GetScreenHeight());
+        for (int i=0; i<_moteParticles.Count; i++)
+            _moteParticles[i] = new Vector2((_moteParticles[i].X - 50 * dt) % Raylib.GetScreenWidth(), (_moteParticles[i].Y + 30 * dt) % Raylib.GetScreenHeight());
+
+        // Handle Shooting Stars (Only at Night)
+        Random r = new Random();
+        if (Env.CurrentTime > 180f && r.Next(0, 400) == 0) // Rare chance per frame during night
+        {
+            _shootingStars.Add(new ShootingStar {
+                Position = new Vector2(r.Next(0, Raylib.GetScreenWidth()), r.Next(0, Raylib.GetScreenHeight() / 2)),
+                Velocity = new Vector2(r.Next(600, 1200), r.Next(200, 500)),
+                Life = 1.0f
+            });
+        }
+
+        for (int i = _shootingStars.Count - 1; i >= 0; i--)
+        {
+            var s = _shootingStars[i];
+            s.Position += s.Velocity * dt;
+            s.Life -= dt * 1.5f;
+            if (s.Life <= 0) _shootingStars.RemoveAt(i);
+        }
+
+        // Handle Cloud Particles
+        for (int i = _cloudParticles.Count - 1; i >= 0; i--)
+        {
+            var p = _cloudParticles[i];
+            p.Life -= dt;
+            if (p.Life <= 0) { _cloudParticles.RemoveAt(i); continue; }
+            p.Position += p.Velocity * dt;
+            p.Size += dt * 40f; // Puff up effect
+            p.Alpha = p.Life / p.MaxLife;
+        }
+
+        // Spawn Boundary Clouds during Raids
+        if (RaidActive && _fixedRaidOutpostPosition.HasValue)
+        {
+            Random rng = new Random();
+            for (int j = 0; j < 3; j++) // Spawn 3 clouds every frame for "much more frequent" look
+            {
+                float angle = (float)(rng.NextDouble() * Math.PI * 2);
+                Vector2 pos = _fixedRaidOutpostPosition.Value + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (120f * 16f);
+                if (rng.Next(0, 2) == 0) SpawnBoundaryCloud(pos);
+            }
+        }
+    }
 
     public void AddChatMessage(string sender, string msg)
     {
@@ -234,6 +341,22 @@ public class Playing
         bool isMenuOpen = Program.IsPaused || Program.CurrentState == GameState.OPTIONS;
         bool runGameLogic = !isMenuOpen || (Program.Net.IsConnected() && Program.LastIP != "127.0.0.1");
 
+        // Handle Window Resizing for Render Textures
+        if (Raylib.IsWindowResized())
+        {
+            Raylib.UnloadRenderTexture(_sceneTarget);
+            Raylib.UnloadRenderTexture(_lightingTarget);
+            
+            int sw = Raylib.GetScreenWidth();
+            int sh = Raylib.GetScreenHeight();
+            _sceneTarget = Raylib.LoadRenderTexture(sw, sh);
+            _lightingTarget = Raylib.LoadRenderTexture(sw, sh);
+        }
+
+        // Update Environment
+        Env.Update(dt, RaidActive);
+        UpdateWeatherParticles(dt);
+
         // Raid Tutorial Trigger (Info Message)
         if (!RaidActive && RaidTimer <= 3.0f && RaidTimer > 0 && !Program.CurrentUser.RaidTutorialFinnished && _raidTutorialStage == RaidTutorialStage.None)
         {
@@ -245,8 +368,11 @@ public class Playing
         // This ensures chat, inventory, hotbar, and mouse cursor management work even when "paused"
         HotbarUI.HoveredStack = null; // Reset tooltip state for the frame
         HandleChatInput();
-        Hotbar.Update();
-        InvMenu.Update();
+        if (!_isChatting)
+        {
+            Hotbar.Update();
+            InvMenu.Update();
+        }
         // Mouse Cursor Management
         if (!InvMenu.Visible && !Program.IsPaused && !_isChatting) {
             Raylib.HideCursor();
@@ -629,6 +755,7 @@ public class Playing
             if (!currentOtherNames.Contains(name))
             {
                 // Something died or disconnected
+                if (_lastOtherPositions.TryGetValue(name, out var pos)) SpawnDeathPuff(pos + new Vector2(32, 32));
                 AudioManager.PlaySound("player_death"); // death.mp3
 
                 // If it's the target we just hit, play the kill sound on top
@@ -639,6 +766,12 @@ public class Playing
             }
         }
         _lastOtherNames = currentOtherNames;
+        
+        // Cache positions for the next frame's death detection
+        _lastOtherPositions.Clear();
+        foreach (var kvp in Others) {
+            _lastOtherPositions[kvp.Key] = kvp.Value.Position;
+        }
 
     }
 
@@ -669,7 +802,21 @@ public class Playing
             if (Raylib.IsKeyPressed(KeyboardKey.Enter))
             {
                 if (!string.IsNullOrWhiteSpace(_chatInput))
-                    Program.Net.SendChat(_chatInput);
+                {
+                    // Command handling for testing purposes
+                    if (_chatInput.StartsWith("time="))
+                    {
+                        if (float.TryParse(_chatInput.Substring(5), out float newTime))
+                        {
+                            Env.CurrentTime = Math.Clamp(newTime, 0f, WorldEnvironment.DayLength);
+                            AddChatMessage("SYSTEM", $"Time set to {Env.CurrentTime:F1}s");
+                        }
+                    }
+                    else
+                    {
+                        Program.Net.SendChat(_chatInput);
+                    }
+                }
                 _isChatting = false;
             }
             if (Raylib.IsKeyPressed(KeyboardKey.Escape)) _isChatting = false; // Close chat on escape
@@ -699,6 +846,45 @@ public class Playing
                 AngularVelocity = (float)(r.NextDouble() * 800 - 400)
             });
         }
+    }
+
+    private void SpawnDeathPuff(Vector2 pos)
+    {
+        Random r = new Random();
+        int count = r.Next(6, 10);
+        for (int i = 0; i < count; i++)
+        {
+            float angle = (float)(r.NextDouble() * Math.PI * 2);
+            float speed = (float)(r.NextDouble() * 40 + 20);
+            float life = (float)(r.NextDouble() * 0.4f + 0.3f);
+            _cloudParticles.Add(new CloudParticle {
+                Position = pos + new Vector2(r.Next(-10, 10), r.Next(-10, 10)),
+                Velocity = new Vector2(MathF.Cos(angle) * speed, MathF.Sin(angle) * speed),
+                Life = life,
+                MaxLife = life,
+                Size = (float)(r.NextDouble() * 20 + 20),
+                Rotation = (float)(r.NextDouble() * 360)
+            });
+        }
+    }
+
+    private void SpawnBoundaryCloud(Vector2 pos)
+    {
+        Random r = new Random();
+        float life = (float)(r.NextDouble() * 4.0f + 3.0f); // Lingering: 3 to 7 seconds
+        float angle = (float)(r.NextDouble() * Math.PI * 2);
+        float speed = (float)(r.NextDouble() * 8 + 2); // Slower drift
+        
+        _cloudParticles.Add(new CloudParticle {
+            Position = pos,
+            Velocity = new Vector2(MathF.Cos(angle) * speed, MathF.Sin(angle) * speed),
+            Life = life,
+            MaxLife = life,
+            Size = (float)(r.NextDouble() * 25 + 20), // Much smaller individual clouds
+            Rotation = (float)(r.NextDouble() * 360),
+            // Boundary clouds are much fainter
+            Alpha = 0.3f 
+        });
     }
 
     private void HandleMovement(float dt)
@@ -954,14 +1140,37 @@ public class Playing
         }
     }
 
+    private void DrawShadows()
+    {
+        // Render directional skewed shadows for trees and structures
+        Vector2 sunDir = Vector2.Normalize(Env.ShadowDirection); // Ensure normalized for consistent offset
+        float len = Env.ShadowLength; // Shadow length multiplier
+        Color shadowCol = new Color(0, 0, 0, 120);
+
+        // Shadows for Players and Raiders
+        var allPlayers = Others.Values.ToList();
+        allPlayers.Add(LocalPlayer);
+        foreach(var p in allPlayers)
+        {
+            Vector2 playerBase = new Vector2(p.Position.X + 32, p.Position.Y + 55); // Center X, near bottom Y of 64x64 sprite
+            Vector2 shadowOffset = sunDir * (10 * len); // Reduced multiplier to keep shadows attached
+            float shadowWidth = 25 + (len * 5); // Wider and stretches with length
+            float shadowHeight = 12 + (len * 3); // Taller and stretches with length
+            Raylib.DrawEllipse((int)(playerBase.X + shadowOffset.X), (int)(playerBase.Y + shadowOffset.Y), 
+                               (int)shadowWidth, (int)shadowHeight, shadowCol);
+        }
+    }
+
     public void Draw()
     {
-        Raylib.DrawRectangle(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(0, 0, 0, 100));
-
+        // 2. Main Scene Pass
+        Raylib.BeginTextureMode(_sceneTarget);
+        Raylib.ClearBackground(Color.Black);
+        
         Cam.Begin();
         // Optimization: Calculate screen bounds to skip drawing off-screen chunks
-        var screenTopLeft = Raylib.GetScreenToWorld2D(new Vector2(0, 0), Cam.RaylibCamera);
-        var screenBottomRight = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), Cam.RaylibCamera);
+        Vector2 screenTopLeft = Raylib.GetScreenToWorld2D(new Vector2(0, 0), Cam.RaylibCamera);
+        Vector2 screenBottomRight = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), Cam.RaylibCamera);
         int margin = chunkSize * 2;
 
         foreach (var coord in loadedChunks)
@@ -978,28 +1187,7 @@ public class Playing
 
             Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, drawColor);
         }
-
-        // Draw Structures
-        foreach (var structureEntry in Structures)
-        {
-            var structure = structureEntry.Value;
-            var tex = AssetManager.GetTexture(structure.TextureName);
-            if (tex.Id != 0)
-            {
-                // Structures are centered on their chunk, so position is already center.
-                // Need to adjust for texture origin to draw correctly.
-                // Assuming structure texture is 64x64, and chunk is 16x16.
-                // Structure position is (chunkX * 16 + 8, chunkY * 16 + 8).
-                // To draw centered, subtract half texture width/height.
-                Raylib.DrawTexture(
-                    tex,
-                    (int)(structure.Position.X - tex.Width / 2),
-                    (int)(structure.Position.Y - tex.Height / 2),
-                    Color.White
-                );
-            }
-        }
-
+        
         // Draw Raid Boundary Visuals (Red forcefield ring)
         if ((RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f)) && _fixedRaidOutpostPosition.HasValue)
         {
@@ -1055,7 +1243,7 @@ public class Playing
                 {
                     if (isSmall)
                     {
-                        float scale = (type == FeatureType.MeadowFlowers) ? 0.35f : 0.5f;
+                    float scale = ((type == FeatureType.MeadowFlowers) ? 0.35f : 0.5f) * 2.0f;
                         Rectangle source = new Rectangle(0, 0, tex.Width, tex.Height);
 
                         Rectangle dest = new Rectangle(
@@ -1081,15 +1269,17 @@ public class Playing
                     }
                     else
                     {
-                        Raylib.DrawTexture(
-                            tex,
-                            (int)wx - (tex.Width / 2) + 8,
-                            (int)wy - tex.Height + 16,
-                            Color.White
-                        );
+                    float scale = 4.0f;
+                    Rectangle source = new Rectangle(0, 0, tex.Width, tex.Height);
+                    Rectangle dest = new Rectangle(wx + 8, wy + 16, tex.Width * scale, tex.Height * scale);
+                    Vector2 origin = new Vector2((tex.Width * scale) / 2f, tex.Height * scale);
+                    Raylib.DrawTexturePro(tex, source, dest, origin, 0f, Color.White);
                     }
                 }
             }
+
+        // Draw Shadows (now in world space, correctly positioned)
+        DrawShadows();
 
         // Render Players - Sorted Top to Bottom (Y-Sorting)
         var playersToDraw = Others.Values.ToList();
@@ -1098,6 +1288,22 @@ public class Playing
         {
             p.Draw();
             Debug.DrawHitbox(p.Position);
+        }
+
+        // Draw Structures last in the world-space pass to ensure they are on top of everything
+        foreach (var structureEntry in Structures)
+        {
+            var structure = structureEntry.Value;
+            var tex = AssetManager.GetTexture(structure.TextureName);
+            if (tex.Id != 0)
+            {
+                float scale = 4.0f;
+                Vector2 drawPos = new Vector2(
+                    structure.Position.X - (tex.Width * scale) / 2f,
+                    structure.Position.Y - (tex.Height * scale) / 2f
+                );
+                Raylib.DrawTextureEx(tex, drawPos, 0f, scale, Color.White);
+            }
         }
 
         // Draw Damage Splashes
@@ -1122,10 +1328,65 @@ public class Playing
             Raylib.DrawRectangleV(drawPos, new Vector2(hSize, hSize), new Color(255, 100, 100, (int)(t * 150)));
         }
 
+        // Draw Cloud Particles as blocky clusters for a pixelated look
+        foreach (var p in _cloudParticles)
+        {
+            float finalAlpha = (p.MaxLife > 1.0f) ? p.Alpha * 0.07f : p.Alpha * 0.6f;
+            Color cloudColor = new Color((byte)255, (byte)255, (byte)255, (byte)(finalAlpha * 255));
+            
+            // Snap everything to a 3x3 virtual pixel grid for much more detail
+            float vPix = 3.0f;
+            Vector2 snapPos = new Vector2(MathF.Round(p.Position.X / vPix) * vPix, MathF.Round(p.Position.Y / vPix) * vPix);
+            float s = MathF.Round((p.Size * 0.5f) / vPix) * vPix;
+
+            // Draw a denser cluster of 7 blocks for a "detailed" pixel cloud
+            Raylib.DrawRectangleV(snapPos - new Vector2(s * 0.5f, s * 0.5f), new Vector2(s, s), cloudColor); // Center
+            
+            // Offset sub-blocks for detail
+            Raylib.DrawRectangleV(snapPos + new Vector2(s * 0.4f, -s * 0.3f), new Vector2(s * 0.7f, s * 0.7f), cloudColor);
+            Raylib.DrawRectangleV(snapPos + new Vector2(-s * 0.8f, s * 0.1f), new Vector2(s * 0.6f, s * 0.6f), cloudColor);
+            Raylib.DrawRectangleV(snapPos + new Vector2(-s * 0.2f, -s * 0.9f), new Vector2(s * 0.5f, s * 0.5f), cloudColor);
+            Raylib.DrawRectangleV(snapPos + new Vector2(s * 0.1f, s * 0.5f), new Vector2(s * 0.8f, s * 0.4f), cloudColor);
+            
+            // Tiny detail bits
+            Raylib.DrawRectangleV(snapPos + new Vector2(s * 0.9f, s * 0.2f), new Vector2(vPix, vPix), cloudColor);
+            Raylib.DrawRectangleV(snapPos + new Vector2(-s * 0.7f, -s * 0.7f), new Vector2(vPix, vPix), cloudColor);
+        }
+
         Cam.End();
+        Raylib.EndTextureMode();
+
+        // 3. Lighting Pass (Scene -> Lighting Buffer)
+        UpdateLightingUniforms();
+        Raylib.BeginTextureMode(_lightingTarget);
+            Raylib.BeginShaderMode(_lightShader);
+                Raylib.DrawTextureRec(_sceneTarget.Texture, new Rectangle(0, 0, _sceneTarget.Texture.Width, -_sceneTarget.Texture.Height), Vector2.Zero, Color.White);
+            Raylib.EndShaderMode();
+        Raylib.EndTextureMode();
+
+        // 4. Post Processing Pass (Lighting Buffer -> Screen)
+        Raylib.BeginShaderMode(_postShader);
+        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "saturation"), Env.Saturation, ShaderUniformDataType.Float);
+        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "contrast"), Env.Contrast, ShaderUniformDataType.Float);
+        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "fogDensity"), Env.FogDensity, ShaderUniformDataType.Float);
+        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "dustDensity"), Env.DustDensity, ShaderUniformDataType.Float);
+
+        // Pass missing color uniforms for fog and dust
+        Vector4 fogCol = new Vector4(Env.FogColor.R / 255f, Env.FogColor.G / 255f, Env.FogColor.B / 255f, 1f);
+        Vector4 dustCol = new Vector4(Env.DustColor.R / 255f, Env.DustColor.G / 255f, Env.DustColor.B / 255f, 1f);
+        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "fogColor"), fogCol, ShaderUniformDataType.Vec4);
+        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "dustColor"), dustCol, ShaderUniformDataType.Vec4);
+
+        // Calculate and pass vignette intensity based on health and raid status
+        float healthPercent = CurrentHealth / (float)MaxHealth;
+        float vignetteIntensity = MathF.Pow(1.0f - healthPercent, 2.0f) + (RaidActive ? 0.15f : 0.0f) + Env.NightVignette;
+        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "vignetteIntensity"), vignetteIntensity, ShaderUniformDataType.Float);
+
+        // Draw the lit world to the screen
+        Raylib.DrawTextureRec(_lightingTarget.Texture, new Rectangle(0, 0, _lightingTarget.Texture.Width, -_lightingTarget.Texture.Height), Vector2.Zero, Color.White);
+        Raylib.EndShaderMode();
 
         // UI Overlay Pass (Draw after Cam.End to be in true Screen Space)
-        float healthPercent = CurrentHealth / (float)MaxHealth;
         float time = (float)Raylib.GetTime();
         
         // Always present health-based vignette, but use a power curve so it's very faint at high health
@@ -1294,8 +1555,175 @@ public class Playing
             Raylib.DrawRectangle((int)mousePos.X - thickness / 2, (int)mousePos.Y - cs, thickness, 2 * cs, crossColor);
         }
 
+        // Atmosphere Pass: Apply the global gradient over the world but under the UI
+        DrawAtmosphericGradient();
+
+        // Draw Shooting Stars (Night only)
+        if (Env.CurrentTime > 180f) DrawShootingStars();
+
+        // Draw God Rays over the atmosphere
+        DrawGodRays();
+
         // Render tooltips last so they are on top of everything
         HotbarUI.RenderTooltip();
+        DrawNightVignetteOverlay(); // Draw night vignette absolutely last
+    }
+
+    private void DrawAtmosphericGradient()
+    {
+        float sw = Raylib.GetScreenWidth();
+        float sh = Raylib.GetScreenHeight();
+
+        // Dynamic Intensity based on the day-night cycle
+        float intensity = Env.SunIntensity;
+        if (intensity <= 0.01f) return;
+
+        // Origin fixed to top-right to shine down to bottom-left as requested
+        Vector2 sunOrigin = new Vector2(sw + 200, -200);
+
+        // Yellow-White Gradient: Pure white core fading into a warm yellow transparent edge
+        Color innerColor = new Color((byte)255, (byte)255, (byte)255, (byte)(intensity * 120)); // Reduced alpha multiplier
+        Color outerColor = new Color((byte)255, (byte)230, (byte)120, (byte)(intensity * 180)); // Reduced alpha multiplier
+
+        Raylib.BeginBlendMode(BlendMode.Additive);
+        // Using sw * 2.5f provides a massive, ultra-smooth falloff that remains visible as a gradient
+        Raylib.DrawCircleGradient((int)sunOrigin.X, (int)sunOrigin.Y, sw * 2.5f, innerColor, outerColor);
+        Raylib.EndBlendMode();
+    }
+
+    private void DrawGodRays()
+    {
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
+        float time = (float)Raylib.GetTime();
+
+        Raylib.BeginBlendMode(BlendMode.Additive);
+        
+        if (Env.GodRayIntensity > 0.01f)
+        {
+            // Add a gentle sway to the origin and angles
+            Vector2 origin = new Vector2(sw + 100 + MathF.Sin(time * 0.5f) * 20, -100 + MathF.Cos(time * 0.5f) * 10);
+            float globalDrift = MathF.Sin(time * 0.3f) * 2.0f; 
+            Color rayColor = new Color(255, 220, 100, (int)(Env.GodRayIntensity * 35));
+            
+            for (int i = 0; i < 7; i++)
+            {
+                float angleStart = (130f + i * 16f + globalDrift) * (MathF.PI / 180f);
+                float angleEnd = angleStart + (8f * (MathF.PI / 180f));
+                float length = sw * 2.0f;
+                Vector2 p2 = origin + new Vector2(MathF.Cos(angleStart) * length, MathF.Sin(angleStart) * length);
+                Vector2 p3 = origin + new Vector2(MathF.Cos(angleEnd) * length, MathF.Sin(angleEnd) * length);
+                Raylib.DrawTriangle(origin, p3, p2, rayColor);
+            }
+        }
+
+        // Draw "Shining Spots" (Dust Motes) - Always visible, but base intensity is 0.1f
+        for (int i = 0; i < _moteParticles.Count; i++)
+        {
+            Vector2 p = _moteParticles[i];
+            float sparkle = MathF.Sin(time * 4f + i) * 0.5f + 0.5f;
+            // Increased base visibility to 0.25f so they show up better during normal daytime
+            int alpha = (int)((0.25f + Env.GodRayIntensity) * sparkle * 180);
+            if (alpha > 5)
+                Raylib.DrawCircleV(new Vector2(p.X % sw, p.Y % sh), 2, new Color(255, 240, 150, alpha));
+        }
+        
+        Raylib.EndBlendMode();
+    }
+
+    private void DrawShootingStars()
+    {
+        Raylib.BeginBlendMode(BlendMode.Additive);
+        foreach (var s in _shootingStars)
+        {
+            Color col = new Color(200, 230, 255, (int)(s.Life * 255));
+            // Draw a trailing line
+            Raylib.DrawLineEx(s.Position, s.Position - (s.Velocity * 0.05f), 2.5f, col);
+            // Draw a tiny bright head
+            Raylib.DrawCircleV(s.Position, 2, new Color(255, 255, 255, (int)(s.Life * 255)));
+        }
+        Raylib.EndBlendMode();
+    }
+
+    private void DrawNightVignetteOverlay()
+    {
+        float nightVignetteAmount = Env.NightVignette;
+        if (nightVignetteAmount <= 0.01f) return; // Only draw if there's a noticeable effect
+
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
+
+        // The vignette should be black, fading from transparent in the center to opaque at the edges
+        // The alpha of the outer color is controlled by Env.NightVignette
+        Color innerColor = new Color(0, 0, 0, 0); // Fully transparent black in the center
+        Color outerColor = new Color(0, 0, 0, (int)(nightVignetteAmount * 255)); // Black with dynamic alpha at the edges
+
+        Raylib.DrawCircleGradient(sw / 2, sh / 2, MathF.Max(sw, sh) * 0.7f, innerColor, outerColor);
+    }
+    
+    private void UpdateLightingUniforms()
+    {
+        // Convert byte-based Color to float-based Vector4 for the shader
+        Vector4 skyTintVec = new Vector4(Env.SkyTint.R / 255f, Env.SkyTint.G / 255f, Env.SkyTint.B / 255f, Env.SkyTint.A / 255f);
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, "skyTint"), skyTintVec, ShaderUniformDataType.Vec4);
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, "exposure"), Env.Exposure, ShaderUniformDataType.Float);
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, "sunDirection"), Env.ShadowDirection, ShaderUniformDataType.Vec2);
+        
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, "screenResolution"), 
+            new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), ShaderUniformDataType.Vec2);
+
+        // Collect and send Point Lights (e.g., Local Player and Others).
+        // The point lights are separate from the global atmospheric gradient.
+        int lightCount = 0;
+        Vector2 playerScreenPos = Raylib.GetWorldToScreen2D(LocalPlayer.Position + new Vector2(32, 32), Cam.RaylibCamera);
+        
+        // Pass Local Player as a light source
+        SetShaderLight(0, playerScreenPos, new Color(255, 200, 150, 255), 300f, 1.2f);
+        lightCount++;
+
+        // Pass other players or entities.
+        // Limiting to 31 others + 1 local player for a total of 32 lights,
+        // which is a common shader uniform array size limit.
+        foreach (var other in Others.Values.Take(31))
+        {
+            Vector2 otherScreenPos = Raylib.GetWorldToScreen2D(other.Position + new Vector2(32, 32), Cam.RaylibCamera);
+            SetShaderLight(lightCount, otherScreenPos, Color.White, 200f, 0.8f);
+            lightCount++;
+        }
+
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, "lightCount"), lightCount, ShaderUniformDataType.Int);
+    }
+
+    private void SetShaderLight(int index, Vector2 pos, Color col, float radius, float intensity)
+    {
+        string baseName = $"lights[{index}]";
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, baseName + ".position"), pos, ShaderUniformDataType.Vec2);
+        Vector4 colorVec = new Vector4(col.R / 255f, col.G / 255f, col.B / 255f, col.A / 255f);
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, baseName + ".color"), colorVec, ShaderUniformDataType.Vec4);
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, baseName + ".radius"), radius, ShaderUniformDataType.Float);
+        Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, baseName + ".intensity"), intensity, ShaderUniformDataType.Float);
+    }
+
+    private void DrawWeatherOverlays()
+    {
+        float rainInt = Env.GetWeatherIntensity(WeatherType.Rain);
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
+        
+        if (rainInt > 0.1f)
+        {
+            foreach (var p in _rainParticles)
+            {
+                Vector2 screenP = new Vector2(p.X % sw, p.Y % sh);
+                Raylib.DrawLineV(screenP, screenP + new Vector2(2, 15), new Color(150, 180, 255, (int)(rainInt * 200)));
+            }
+        }
+        float dustInt = Env.GetWeatherIntensity(WeatherType.DustStorm);
+        if (dustInt > 0.1f)
+        {
+            foreach (var p in _dustParticles)
+                Raylib.DrawCircleV(new Vector2(p.X % sw, p.Y % sh), 8, new Color(180, 150, 80, (int)(dustInt * 200))); // Larger and more opaque dust particles
+        }
     }
 
     private void DrawChat()

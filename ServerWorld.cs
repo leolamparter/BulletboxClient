@@ -157,11 +157,11 @@ public class ServerWorld
             int roll = Math.Abs(fHash) % 1000; // Switch to 1000 for finer control
 
             // Spatial Filtering: Only allow a feature to spawn if it is the "priority winner" 
-            // in a 5-chunk radius. This ensures a minimum of 5 empty chunks between features.
+            // in a 11x11 area. This ensures a minimum of 6 chunks between features.
             bool passesFilter = true;
-            for (int dx = -3; dx <= 3; dx++)
+            for (int dx = -5; dx <= 5; dx++)
             {
-                for (int dy = -3; dy <= 3; dy++)
+                for (int dy = -5; dy <= 5; dy++)
                 {
                     if (dx == 0 && dy == 0) continue;
                     int nx = chunkX + dx;
@@ -233,11 +233,11 @@ public class ServerWorld
             if (rng.Next(0, 20000) < 1)
             {
                 // Place a raid outpost at the center of the chunk
-                const int MIN_RAID_OUTPOST_DISTANCE_CHUNKS = 120;
+                const int MIN_RAID_OUTPOST_DISTANCE_CHUNKS = 180;
                 bool canPlaceOutpost = true;
 
-                // Ensure outposts don't spawn within 120 chunks of the world origin (spawn)
-                if (Math.Sqrt(chunkX * chunkX + chunkY * chunkY) < 120) canPlaceOutpost = false;
+                // Ensure outposts don't spawn within 180 chunks of the world origin (spawn)
+                if (Math.Sqrt(chunkX * chunkX + chunkY * chunkY) < 180) canPlaceOutpost = false;
 
                 if (canPlaceOutpost)
                 {
@@ -263,6 +263,8 @@ public class ServerWorld
                     Vector2 structurePos = new Vector2(chunkX * 16 + 8, chunkY * 16 + 8);
                     Structure outpost = new Structure(structurePos, StructureType.RaidOutpost, chunkX, chunkY, "");
                     Structures.TryAdd((chunkX, chunkY), outpost);
+                    // Clear feature if a structure exists in this chunk to ensure it generates "on top"
+                    chunk.Feature = ServerFeatureType.None;
                 }
             }
 

@@ -13,6 +13,8 @@ public class OptionsScreen
 
     public void Update()
     {
+        if (Program.cameFrom == GameState.HOME) HomeScreen.background.Update();
+
         float centerX = Raylib.GetScreenWidth() / 2f;
         float centerY = Raylib.GetScreenHeight() / 2f;
 
