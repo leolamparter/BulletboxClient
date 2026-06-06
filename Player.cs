@@ -45,7 +45,7 @@ public class Player
             if (AttackAnimProgress < 0) AttackAnimProgress = 0;
         }
 
-        bool isMob = Name.StartsWith("Raider") || Name == "Brimstalker";
+        bool isMob = Name.StartsWith("Raider") || Name == "Brimstalker" || Name.StartsWith("Flicker");
 
         // Initialize and Update the pixelated texture OUTSIDE of the Camera Mode for players
         if (!_initialized && !isMob)
@@ -180,19 +180,19 @@ public class Player
         // 3. Execution Pass - Draw body first, then items on top
         bool isRaider = Name.StartsWith("Raider");
         bool isBrimstalker = Name == "Brimstalker";
-        if (isRaider || isBrimstalker)
+        bool isFlicker = Name.StartsWith("Flicker");
+
+        float currentScale = 1.0f;
+        if (isFlicker) currentScale = 0.5f; // Flicker is 50% smaller
+
+        if (isRaider || isBrimstalker || isFlicker)
         {
-            string texPrefix = isRaider ? "raidshroomer" : "brimstalker";
-            string mobTexKey = $"{texPrefix}_idle";
+            string texPrefix = isFlicker ? "flicker" : (isRaider ? "raidshroomer" : "brimstalker");
+            string mobTexKey = $"{texPrefix}_idle"; // Default to idle
             
-            // Determine animation state based on health and proximity
-            if (Health < MaxHealth * 0.3f)
-            {
-                mobTexKey = $"{texPrefix}_afraid";
-            }
+            if (Health < MaxHealth * 0.3f) mobTexKey = $"{texPrefix}_afraid";
             else if (Program.PlayingState != null)
             {
-                // Vision/Detection range (45 chunks * 16 units)
                 float dist = Vector2.Distance(Position, Program.PlayingState.LocalPlayer.Position);
                 if (dist < 720f) mobTexKey = $"{texPrefix}_angry";
             }
@@ -201,7 +201,11 @@ public class Player
             if (mobTex.Id != 0)
             {
                 Rectangle mobSource = new Rectangle(0, 0, mobTex.Width, mobTex.Height);
-                Raylib.DrawTexturePro(mobTex, mobSource, dest, destOrigin, 0f, Color.White);
+                Raylib.DrawTexturePro(mobTex, mobSource, new Rectangle(center.X, center.Y, 96 * currentScale, 96 * currentScale), new Vector2(48 * currentScale, 48 * currentScale), 0f, Color.White);
+            }
+            else
+            {
+                Console.WriteLine($"[DEBUG] Failed to load texture for entity '{Name}'. Requested key: '{mobTexKey}'. Please verify the file exists and is correctly named in 'resources/textures/entity/flicker/'.");
             }
         }
         else
@@ -211,8 +215,8 @@ public class Player
         }
 
         // Always draw items in front of the player body
-        // Brimstalker has no weapons or offhand items drawn
-        if (Name != "Brimstalker")
+        // Brimstalker and Flicker have no weapons or offhand items drawn
+        if (Name != "Brimstalker" && !Name.StartsWith("Flicker"))
         {
             DrawWeapon();
             DrawOffhand();
@@ -252,7 +256,7 @@ public class Player
         }
 
         // Draw Name Tag
-        if (!Name.StartsWith("Raider") && Name != "Brimstalker")
+        if (!Name.StartsWith("Raider") && Name != "Brimstalker" && !Name.StartsWith("Flicker"))
         {
             int textWidth = Raylib.MeasureText(Name, 20);
             int xPos = (int)(screenPos.X - (textWidth / 2));

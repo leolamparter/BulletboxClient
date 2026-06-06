@@ -247,6 +247,11 @@ public class Playing
         AssetManager.LoadTexture("brimstalker_angry", "resources/textures/entity/brimstalker/angry.png");
         AssetManager.LoadTexture("brimstalker_afraid", "resources/textures/entity/brimstalker/afraid.png");
         
+        // Load Flicker texture
+        AssetManager.LoadTexture("flicker_idle", "resources/textures/entity/flicker/idle.png");
+        AssetManager.LoadTexture("flicker_angry", "resources/textures/entity/flicker/angry.png");
+        AssetManager.LoadTexture("flicker_afraid", "resources/textures/entity/flicker/afraid.png");
+
         // Load bomb texture
         AssetManager.LoadTexture("brimstalker_bomb", "resources/textures/entity/brimstalker/bomb.png");
 

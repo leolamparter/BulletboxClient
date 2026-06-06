@@ -14,6 +14,8 @@ public class ServerProgram
     private static float _raidInitialTotalHealth = 0f;
     private static float _playerRegenTimer = 0f;
     private static float _raidRecheckTimer = 0f;
+    private static float _worldTime = 0f;
+    private static float _flickerSpawnTimer = 0f;
 
     public static async Task RunServerAsync()
     {
@@ -48,6 +50,35 @@ public class ServerProgram
                 // Wait for the next tick
                 await Task.Delay(16); 
                 if (Program.IsPaused && Program.LastIP == "127.0.0.1") continue;
+
+                _worldTime += dt;
+                // Simple 10-minute cycle: 5 mins Day (0-300s), 5 mins Night (300-600s)
+                bool isNight = (_worldTime % 600) > 300;
+
+                // Rare Flicker Spawning logic (Checks every 15 seconds)
+                _flickerSpawnTimer += dt;
+                if (isNight && _flickerSpawnTimer > 15f)
+                {
+                    _flickerSpawnTimer = 0;
+                    if (rand.Next(100) < 10) // 10% chance every 15s of night
+                    {
+                        lock (ConnectedPlayers)
+                        {
+                            if (ConnectedPlayers.Count > 0)
+                            {
+                                var p = ConnectedPlayers[rand.Next(ConnectedPlayers.Count)];
+                                Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
+                                
+                                // Spawn "Flicker" 400-600 units away from a random player
+                                float spawnAngle = (float)(rand.NextDouble() * Math.PI * 2);
+                                Vector2 spawnPos = pPos + new Vector2(MathF.Cos(spawnAngle) * 500, MathF.Sin(spawnAngle) * 500);
+                                int id = rand.Next(10000, 99999);
+                                var flicker = new RaiderBot($"Flicker {id}", spawnPos) { MaxHealth = 50, Health = 50, PreviousHealth = 50, HeldItemID = 0 };
+                                lock(BulletboxWorld.Raiders) { BulletboxWorld.Raiders.Add(flicker); }
+                            }
+                        }
+                    }
+                }
 
                 float triggerDist = 960f; // 60 chunks * 16 units/chunk
 
@@ -251,12 +282,23 @@ public class ServerProgram
                 float dist = rand.Next(100, 400); // Spawn inside the massive 120-chunk arena
                 Vector2 spawnPos = s.Position + new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
                 
-                int id = rand.Next(10000, 99999);
-                var bot = new RaiderBot($"Raider {id}", spawnPos);                            
-                bot.HeldItemID = (byte)'S';
-                bot.AttackCooldown = 0.425f;
-                _raidInitialTotalHealth += bot.MaxHealth;
-                BulletboxWorld.Raiders.Add(bot);
+                if (rand.Next(100) < 20) // 20% chance to spawn a Flicker
+                {
+                    int id = rand.Next(10000, 99999);
+                    var flicker = new RaiderBot($"Flicker {id}", spawnPos) { MaxHealth = 50, Health = 50, PreviousHealth = 50, HeldItemID = 0 };
+                    _raidInitialTotalHealth += flicker.MaxHealth;
+                    BulletboxWorld.Raiders.Add(flicker);
+                    Console.WriteLine($"[Server] Spawning Flicker at {spawnPos}");
+                }
+                else // Otherwise, spawn a regular Raidshroomer
+                {
+                    int id = rand.Next(10000, 99999);
+                    var bot = new RaiderBot($"Raider {id}", spawnPos);                            
+                    bot.HeldItemID = (byte)'S';
+                    bot.AttackCooldown = 0.425f;
+                    _raidInitialTotalHealth += bot.MaxHealth; // Default RaiderBot MaxHealth is 100
+                    BulletboxWorld.Raiders.Add(bot);
+                }
             }
         }
 
@@ -306,7 +348,22 @@ public class ServerProgram
                     Vector2 targetOffset = new Vector2(MathF.Cos(hash) * 35f, MathF.Sin(hash) * 35f);
                     Vector2 dir = Vector2.Normalize((targetPos + targetOffset) - bot.Position);
                     
-                    // AI Change: Brimstalker never runs away
+                    // Flicker Teleportation Logic (re-added here as it was removed in previous diff)
+                    if (bot.Name.StartsWith("Flicker"))
+                    {
+                        if (bot.Health < bot.PreviousHealth)
+                        {
+                            // Teleport 150-300 units away in a random direction
+                            float angle = (float)(rand.NextDouble() * Math.PI * 2);
+                            float dist = rand.Next(150, 300);
+                            bot.Position += new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
+                            bot.PreviousHealth = bot.Health;
+                            bot.ChargePhase = 0; // Reset charge if teleporting
+                            bot.ChargeTimer = 0;
+                        }
+                    }
+
+                    // AI Change: Brimstalker never runs away, but Raiders and Flickers can
                     if (bot.Name != "Brimstalker") {
                         if (bot.Health < 30 && bot.FleeTimer <= 0 && rand.Next(100) < 1) bot.FleeTimer = 8.0f;
                     }
@@ -320,11 +377,11 @@ public class ServerProgram
 
                     bot.Rotation = (float)(Math.Atan2(dir.Y, dir.X) * (180.0 / Math.PI));
 
-                    if (bot.Name == "Brimstalker") {
-                        // Charge Attack State Machine
+                    if (bot.Name == "Brimstalker" || (bot.Name.StartsWith("Flicker") && minDist < 250f)) {
+                        // Charge Attack State Machine (Shared by Brimstalker and Aggroed Flicker)
                         if (bot.ChargePhase == 0) {
                             bot.ChargeCooldown -= dt;
-                            if (bot.ChargeCooldown <= 0) {
+                            if (bot.ChargeCooldown <= 0 || (bot.Name.StartsWith("Flicker") && minDist < 150f)) {
                                 bot.ChargePhase = 1;
                                 bot.ChargeTimer = 1.0f; // 1s Backing up phase
                             }
@@ -347,10 +404,12 @@ public class ServerProgram
                             // Phase 2: High speed charge (5x normal raider speed = 1300)
                             bot.Position += bot.ChargeDirection * 1300f * dt;
                             bot.ChargeTimer -= dt;
+                            
+                            float hitRadius = bot.Name.StartsWith("Flicker") ? 35f : 45f;
+                            int damage = bot.Name.StartsWith("Flicker") ? 25 : 40;
 
-                            // Collision Damage Check (40 Damage)
-                            if (!bot.HasDealtChargeDamage && Vector2.Distance(bot.Position, targetPos) < 45f) {
-                                target.Damage(40);
+                            if (!bot.HasDealtChargeDamage && Vector2.Distance(bot.Position, targetPos) < hitRadius) {
+                                target.Damage(damage);
                                 target.SyncHealth();
                                 bot.HasDealtChargeDamage = true;
                             }

@@ -71,6 +71,7 @@ public class RaiderBot
     public Vector2 Position;
     public Vector2 Velocity = Vector2.Zero;
     public int Health = 100;
+    public int PreviousHealth = 100;
     public int MaxHealth = 100;
     public float Rotation;
     public float AttackTimer;
