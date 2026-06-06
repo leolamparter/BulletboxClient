@@ -30,6 +30,9 @@ public class ServerPlayer
     private DateTime _lastHitTime = DateTime.MinValue;
     public int SelectedSlot = 0;
 
+    public float AshenTime = 0f;
+    public float BrimstalkerCooldown = 0f;
+
     public readonly object WriterLock = new();
 
     // The Server's source of truth
@@ -189,7 +192,8 @@ public class ServerPlayer
                                     lock (ServerProgram.ConnectedPlayers) {
                                         foreach (var p in ServerProgram.ConnectedPlayers) p.SendLeaveSignal(bot.Name);
                                     }
-                                    AddItem((byte)'R', 1); // Reward player with a Raidshroom
+                                    if (bot.Name.StartsWith("Raider")) AddItem((byte)'R', 1); // Reward player with a Raidshroom
+                                    if (bot.Name == "Brimstalker") AddItem((byte)'M', Random.Shared.Next(3, 6)); // Reward 3-5 Brimstone Powder
                                 }
                             }
                         }

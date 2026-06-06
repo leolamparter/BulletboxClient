@@ -30,7 +30,9 @@ public class WorldBackground
         new Color(45, 80, 145, 255),   // 4: Ocean
         new Color(240, 220, 180, 255), // 5: Beach
         new Color(210, 95, 60, 255),   // 6: Brimstone
-        new Color(75, 150, 210, 255)   // 7: River
+        new Color(75, 150, 210, 255),  // 7: River
+        new Color(34, 14, 14, 255),    // 8: Ashen Wastelands (Base: #220e0e)
+        new Color(202, 28, 28, 255)    // 9: Lava Pool (Base: #ca1c1c)
     };
 
     private void LoadFeatureAssets()
@@ -55,6 +57,7 @@ public class WorldBackground
         if (idx < 0 || idx >= _biomeColors.Length) return Color.Gray;
         
         Color baseCol = _biomeColors[idx];
+        float noise = (Perlin.Noise(cx * 0.20f, cy * 0.20f) + 1f) * 0.5f; // Increased frequency for more detail
         if (biome == BiomeType.River)
         {
             // River: shimmer effect with independent rerolling to match Playing.cs
@@ -70,9 +73,96 @@ public class WorldBackground
                 (int)Math.Clamp(baseCol.B + offset, 0, 255),
                 255);
         }
-        return baseCol;
+        if (biome == BiomeType.AshenWastelands)
+        {
+            if (noise < 0.5f)
+            {
+                // Lerp between #140808 (20, 8, 8) and #330f0f (51, 15, 15) for deeper darks
+                float t = noise * 2.0f;
+                return new Color(
+                    (int)(20 + (51 - 20) * t),
+                    (int)(8 + (15 - 8) * t),
+                    (int)(8 + (15 - 8) * t),
+                    255);
+            }
+            // Lerp between #330f0f (51, 15, 15) and #352b2b (53, 43, 43)
+            float t2 = (noise - 0.5f) * 2.0f;
+            return new Color(
+                (int)(51 + (54 - 51) * t2),
+                (int)(15 + (43 - 15) * t2),
+                (int)(15 + (43 - 15) * t2),
+                255);
+        }
+        if (biome == BiomeType.LavaPool)
+        {
+            if (noise < 0.5f)
+            {
+                // Lerp between #921212 (146, 18, 18) and #ca1c1c (202, 28, 28)
+                float t = noise * 2.0f;
+                return new Color(
+                    (int)(146 + (202 - 146) * t),
+                    (int)(18 + (28 - 18) * t),
+                    (int)(18 + (28 - 18) * t),
+                    255);
+            }
+            // Lerp between #ca1c1c (202, 28, 28) and #df8b1c (223, 139, 28)
+            float t2 = (noise - 0.5f) * 2.0f;
+            return new Color(
+                (int)(202 + (223 - 202) * t2),
+                (int)(28 + (139 - 28) * t2),
+                (int)(28 + (28 - 28) * t2),
+                255);
+        }
+        // Apply color variation to other biomes
+        switch (biome)
+        {
+            case BiomeType.Meadow:
+                return new Color(
+                    (int)(145 + (95 - 145) * noise),
+                    (int)(205 + (155 - 205) * noise),
+                    (int)(135 + (85 - 135) * noise),
+                    255);
+            case BiomeType.Forest:
+                return new Color(
+                    (int)(50 + (10 - 50) * noise),
+                    (int)(115 + (75 - 115) * noise),
+                    (int)(65 + (25 - 65) * noise),
+                    255);
+            case BiomeType.Desert:
+                return new Color(
+                    (int)(230 + (170 - 230) * noise),
+                    (int)(205 + (145 - 205) * noise),
+                    (int)(140 + (80 - 140) * noise),
+                    255);
+            case BiomeType.StonyPeaks:
+                return new Color(
+                    (int)(140 + (90 - 140) * noise),
+                    (int)(145 + (95 - 145) * noise),
+                    (int)(155 + (105 - 155) * noise),
+                    255);
+            case BiomeType.Ocean:
+                return new Color(
+                    (int)(45 + (10 - 45) * noise),
+                    (int)(80 + (45 - 80) * noise),
+                    (int)(145 + (110 - 145) * noise),
+                    255);
+            case BiomeType.Beach:
+                return new Color(
+                    (int)(240 + (190 - 240) * noise),
+                    (int)(220 + (170 - 220) * noise),
+                    (int)(180 + (130 - 180) * noise),
+                    255);
+            case BiomeType.BrimstoneSprings:
+                return new Color(
+                    (int)(210 + (255 - 210) * noise),
+                    (int)(95 + (145 - 95) * noise),
+                    (int)(60 + (110 - 60) * noise),
+                    255);
+            default:
+                return baseCol; // Fallback for any other biome
+        }
+        // return baseCol; // Redundant return
     }
-
     public WorldBackground()
     {
         _seed = new Random().Next(-1000000, 1000000);
@@ -185,12 +275,16 @@ public class WorldBackground
 
     private BiomeType GetBiomeAt(int cx, int cy)
     {
-        if (_biomeCache.TryGetValue((cx, cy), out var b)) return b;
+        if (_biomeCache.TryGetValue((cx, cy), out var b)) 
+        {
+            return b;
+        }
 
-        float sx = cx + (_seed % 5000); 
+        float sx = cx + (_seed % 5000);
         float sy = cy + (_seed / 5000);
 
         float oceanNoise = (Perlin.Noise(sx * 0.003f, sy * 0.003f) + 1f) * 0.5f;
+        float ashenNoise = (Perlin.Noise(sx * 0.0015f, sy * 0.0015f) + 1f) * 0.5f;
         float riverNoise = Perlin.Noise(sx * 0.025f, sy * 0.025f);
         float noise = Perlin.Noise(sx * 0.008f, sy * 0.008f);
         float noise2 = Perlin.Noise(sx * 0.008f * 0.5f + 1000, sy * 0.008f * 0.5f - 1000) * 0.5f;
@@ -200,6 +294,12 @@ public class WorldBackground
         BiomeType biome;
         if (oceanNoise < 0.25f) biome = BiomeType.Ocean;
         else if (oceanNoise < 0.30f) biome = BiomeType.Beach;
+        else if (ashenNoise > 0.68f) 
+        {
+            float lavaNoise = (Perlin.Noise(sx * 0.008f, sy * 0.008f) + 1f) * 0.5f;
+            if (ashenNoise > 0.695f && lavaNoise > 0.50f) biome = BiomeType.LavaPool;
+            else biome = BiomeType.AshenWastelands;
+        }
         else if (Math.Abs(riverNoise) < 0.035f) biome = BiomeType.River;
         else if (n > 0.80f) biome = BiomeType.BrimstoneSprings;
         else if (n < 0.20f) biome = BiomeType.StonyPeaks;
@@ -215,7 +315,6 @@ public class WorldBackground
     {
         int fHash = (cx * 73856093) ^ (cy * 19349663) ^ _seed;
         int roll = Math.Abs(fHash) % 1000;
-
         // Spatial Filtering: ensure minimum 6 chunks distance
         for (int dx = -5; dx <= 5; dx++) {
             for (int dy = -5; dy <= 5; dy++) {
@@ -259,7 +358,7 @@ public class WorldBackground
     {
         BiomeType myBiome = GetBiomeAt(cx, cy);
         Color baseCol = GetBiomeBaseColor(myBiome, cx, cy);
-        if (myBiome == BiomeType.River) return baseCol;
+        if (myBiome == BiomeType.River || myBiome == BiomeType.LavaPool) return baseCol;
 
         float rSum = baseCol.R, gSum = baseCol.G, bSum = baseCol.B, wSum = 1.0f;
         for (int dx = -1; dx <= 1; dx++) {

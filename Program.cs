@@ -75,7 +75,7 @@ class Program
             searchPath = parentDir!; // Move up one level
         }
 
-        if (finalWorkingDir != null) 
+        if (finalWorkingDir != null)
         {
             Directory.SetCurrentDirectory(finalWorkingDir);
             Console.WriteLine($"[Core] Working Directory set to: {Directory.GetCurrentDirectory()}");
@@ -85,17 +85,19 @@ class Program
             Console.WriteLine("[Core] CRITICAL ERROR: Could not find 'resources' folder!");
         }
 
+        // --- Raylib Initialization ---
         Raylib.SetConfigFlags(ConfigFlags.ResizableWindow);
         Raylib.InitWindow(800, 480, "Bulletbox");
         Raylib.InitAudioDevice();
         Raylib.SetTargetFPS(60);
 
         // MANDATORY: Stops ESC from instantly killing the app
-        Raylib.SetExitKey(KeyboardKey.Null); 
+        Raylib.SetExitKey(KeyboardKey.Null);
 
         CurrentUser = SaveManager.Load();
         Settings.FOV = CurrentUser.FOV;
 
+        // --- UI Screen Initialization ---
         HomeScreen homeScreen = new HomeScreen();
         LoginScreen loginScreen = new LoginScreen();
         pauseMenu = new PauseMenu(); // Initialize the menu
@@ -120,7 +122,7 @@ class Program
         });
 
 
-        while (!Raylib.WindowShouldClose())
+        while (!Raylib.WindowShouldClose()) // Main Game Loop
         {
             // Call this inside your main update/tick loop (e.g., in Raylib)
             client.Invoke();

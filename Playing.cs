@@ -54,6 +54,15 @@ public class ShootingStar
     public float Life;
 }
 
+public class VisualBomb
+{
+    public Vector2 Position;
+    public Vector2 Velocity;
+    public float Life;
+    public float Rotation;
+    public VisualBomb(Vector2 pos, Vector2 vel) { Position = pos; Velocity = vel; Life = 1.0f; Rotation = 0; }
+}
+
 // The StructureType enum and Structure class are now in BulletboxClient/Structure.cs
 public class Playing
 {
@@ -66,6 +75,7 @@ public class Playing
     public int MaxHealth = 100;
     public int CurrentHunger = 100;
     public Dictionary<string, Player> Others = new Dictionary<string, Player>();
+    public readonly object OthersLock = new();
     public CameraManager Cam;
     public Inventory PlayerInventory = new Inventory();
     public HotbarUI Hotbar;
@@ -84,6 +94,7 @@ public class Playing
     private List<Vector2> _moteParticles = new();
     private List<CloudParticle> _cloudParticles = new();
     private List<ShootingStar> _shootingStars = new();
+    private List<VisualBomb> _visualBombs = new();
 
     // Optimization Caches
     private Dictionary<(int, int), byte> _chunkSnapshot = new();
@@ -99,9 +110,19 @@ public class Playing
     private float _cHitTimer = 10f;   
     private int _selectedHotbarIndex = 0;
     private int _lastLocalHealth = 100;
+    private float _damageFlashTimer = 0f;
+    private float _cameraShakeIntensity = 0f;
     private float _hungerHealTimer = 0f;
     private Dictionary<string, int> _lastOthersHealth = new();
     private List<DamageParticle> _damageParticles = new();
+    private List<DamageParticle> _emberParticles = new();
+    private List<Vector2> _ashFallParticles = new(); // New list for ash fall
+    private float _ashFallAlpha = 0f; // Controls visibility of ash fall
+    private float _dustStormAlpha = 0f; // Controls visibility of dust storms based on biome
+    private Random _rng = new Random();
+
+    private float _playerBaseSpeed = 350f; // Default player movement speed
+    private bool _isSuperSpeedActive = false;
 
     private Vector2 _kbVelocity = Vector2.Zero;
     
@@ -155,7 +176,9 @@ public class Playing
         new Color(45, 80, 145, 255),   // 4: Ocean
         new Color(240, 220, 180, 255), // 5: Beach
         new Color(210, 95, 60, 255),   // 6: Brimstone
-        new Color(75, 150, 210, 255)   // 7: River
+        new Color(75, 150, 210, 255), // 7: River
+        new Color(34, 14, 14, 255),    // 8: Ashen Wastelands (Base: #220e0e)
+        new Color(202, 28, 28, 255)    // 9: Lava Pool (Base: #ca1c1c)
     };
 
     public Playing(string myName)
@@ -210,6 +233,7 @@ public class Playing
         AssetManager.LoadTexture("spear", "resources/textures/item/spear.png");
         AssetManager.LoadTexture("sword", "resources/textures/item/sword.png");
         AssetManager.LoadTexture("raidshroom", "resources/textures/item/raidshroom.png");
+        AssetManager.LoadTexture("brimstone_powder", "resources/textures/item/brimstone_powder.png");
         AssetManager.LoadTexture("shield", "resources/textures/item/shield.png");
         AssetManager.LoadTexture("bow", "resources/textures/item/bow.png"); // Assuming 'bow.png' exists
 
@@ -217,6 +241,14 @@ public class Playing
         AssetManager.LoadTexture("raidshroomer_idle", "resources/textures/entity/raidshroomer/idle.png");
         AssetManager.LoadTexture("raidshroomer_angry", "resources/textures/entity/raidshroomer/angry.png");
         AssetManager.LoadTexture("raidshroomer_afraid", "resources/textures/entity/raidshroomer/afraid.png");
+
+        // Load brimstalker textures
+        AssetManager.LoadTexture("brimstalker_idle", "resources/textures/entity/brimstalker/idle.png");
+        AssetManager.LoadTexture("brimstalker_angry", "resources/textures/entity/brimstalker/angry.png");
+        AssetManager.LoadTexture("brimstalker_afraid", "resources/textures/entity/brimstalker/afraid.png");
+        
+        // Load bomb texture
+        AssetManager.LoadTexture("brimstalker_bomb", "resources/textures/entity/brimstalker/bomb.png");
 
         // Load heart textures for overhead health bars
         AssetManager.LoadTexture("heart_full", "resources/textures/ui/health_bar/heart_full.png");
@@ -259,23 +291,48 @@ public class Playing
     private void InitializeWeatherParticles()
     {
         Random r = new Random();
-        for(int i=0; i<200; i++) _rainParticles.Add(new Vector2(r.Next(0, 2000), r.Next(0, 2000)));
-        for(int i=0; i<300; i++) _dustParticles.Add(new Vector2(r.Next(0, 2000), r.Next(0, 2000))); // Increased dust particles
-        for(int i=0; i<250; i++) _moteParticles.Add(new Vector2(r.Next(0, 2000), r.Next(0, 2000))); // Increased mote count
+        // Massive counts and large initial distribution (4000) for high-res/fullscreen support
+        int spawnRange = 4000;
+        for(int i=0; i<500; i++) _rainParticles.Add(new Vector2(r.Next(0, spawnRange), r.Next(0, spawnRange)));
+        for(int i=0; i<3000; i++) _dustParticles.Add(new Vector2(r.Next(0, spawnRange), r.Next(0, spawnRange))); 
+        for(int i=0; i<500; i++) _moteParticles.Add(new Vector2(r.Next(0, spawnRange), r.Next(0, spawnRange)));
+        for(int i=0; i<3500; i++) _ashFallParticles.Add(new Vector2(r.Next(0, spawnRange), r.Next(0, spawnRange)));
     }
 
     private void UpdateWeatherParticles(float dt)
-
     {
         float rainInt = Env.GetWeatherIntensity(WeatherType.Rain);
         float dustInt = Env.GetWeatherIntensity(WeatherType.DustStorm);
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
         
         for (int i=0; i<_rainParticles.Count; i++)
-            _rainParticles[i] = new Vector2((_rainParticles[i].X + 100 * dt) % Raylib.GetScreenWidth(), (_rainParticles[i].Y + 800 * dt) % Raylib.GetScreenHeight());
+            _rainParticles[i] = new Vector2((_rainParticles[i].X + 100 * dt) % sw, (_rainParticles[i].Y + 800 * dt) % sh);
         for (int i=0; i<_dustParticles.Count; i++)
-            _dustParticles[i] = new Vector2((_dustParticles[i].X + 400 * dt) % Raylib.GetScreenWidth(), (_dustParticles[i].Y + 50 * dt) % Raylib.GetScreenHeight());
+        {
+            // Turbulent movement logic for a more atmospheric storm
+            float jitter = MathF.Sin((float)Raylib.GetTime() * 1.5f + i) * 12f * dt;
+            _dustParticles[i] = new Vector2((_dustParticles[i].X + 450 * dt) % sw, (_dustParticles[i].Y + 30 * dt + jitter) % sh);
+        }
         for (int i=0; i<_moteParticles.Count; i++)
-            _moteParticles[i] = new Vector2((_moteParticles[i].X - 50 * dt) % Raylib.GetScreenWidth(), (_moteParticles[i].Y + 30 * dt) % Raylib.GetScreenHeight());
+            _moteParticles[i] = new Vector2((_moteParticles[i].X - 50 * dt) % sw, (_moteParticles[i].Y + 30 * dt) % sh);
+
+        // Update Ash Fall particles
+        for (int i=0; i<_ashFallParticles.Count; i++)
+        {
+            Vector2 p = _ashFallParticles[i];
+            // Use index-based pseudo-random hashing for more unique speeds and sway frequencies.
+            // This prevents particles from clumping into the same 40 identical "lanes".
+            float speedVariation = ((i * 73856093) % 5000) / 100f; 
+            p.Y += (60 + speedVariation) * dt; 
+            float swayFreq = 0.4f + ((i * 19349663) % 1000) / 1000f;
+            float sway = MathF.Sin((float)Raylib.GetTime() * swayFreq + i) * 25f * dt;
+            p.X += sway + (10f * dt); // Slight global drift to the right
+            if (p.Y > sh) p.Y = 0; 
+            if (p.X < -50) p.X = sw + 50;
+            if (p.X > sw + 50) p.X = -50;
+            _ashFallParticles[i] = p;
+        }
 
         // Handle Shooting Stars (Only at Night)
         Random r = new Random();
@@ -320,6 +377,39 @@ public class Playing
         }
     }
 
+    public void SpawnVisualBomb(Vector2 start, Vector2 velocity)
+    {
+        _visualBombs.Add(new VisualBomb(start, velocity));
+    }
+
+    private void UpdateVisualBombs(float dt)
+    {
+        for (int i = _visualBombs.Count - 1; i >= 0; i--) {
+            var b = _visualBombs[i];
+            
+            // Client-side Aimbot: Gently curve the visual projectile toward the local player
+            Vector2 playerCenter = LocalPlayer.Position + new Vector2(32, 32);
+            Vector2 desiredDir = Vector2.Normalize(playerCenter - b.Position);
+            b.Velocity = Vector2.Normalize(Vector2.Lerp(Vector2.Normalize(b.Velocity), desiredDir, dt * 3.5f)) * b.Velocity.Length();
+            
+            b.Position += b.Velocity * dt;
+            b.Life -= dt;
+            b.Rotation += dt * 360f;
+            
+            bool exploded = b.Life <= 0;
+            if (!exploded)
+            {
+                float dist = Vector2.Distance(LocalPlayer.Position + new Vector2(32, 32), b.Position);
+                if (dist < 25f) exploded = true;
+            }
+
+            if (exploded) {
+                SpawnDeathPuff(b.Position); // Visual explosion
+                _visualBombs.RemoveAt(i);
+            }
+        }
+    }
+
     public void AddChatMessage(string sender, string msg)
     {
         _chatLog.Add((sender, msg, (float)Raylib.GetTime()));
@@ -334,6 +424,9 @@ public class Playing
     public void Update()
     {
         float dt = Raylib.GetFrameTime();
+        int playerChunkX = 0;
+        int playerChunkY = 0;
+        byte currentBiome = 0;
 
         // Condition for game logic to run:
         // Game logic pauses if Program.IsPaused is true AND we are connected to an integrated server (127.0.0.1).
@@ -356,6 +449,7 @@ public class Playing
         // Update Environment
         Env.Update(dt, RaidActive);
         UpdateWeatherParticles(dt);
+        UpdateVisualBombs(dt);
 
         // Raid Tutorial Trigger (Info Message)
         if (!RaidActive && RaidTimer <= 3.0f && RaidTimer > 0 && !Program.CurrentUser.RaidTutorialFinnished && _raidTutorialStage == RaidTutorialStage.None)
@@ -472,8 +566,8 @@ public class Playing
 
             int targetRadius = Program.GetRequiredChunkRadius();
             bool radiusChanged = targetRadius != ChunkViewRadius;
-            int playerChunkX = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
-            int playerChunkY = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
+            playerChunkX = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
+            playerChunkY = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
 
             // Optimization: Only update loading/unloading logic when player enters a new chunk
             if (playerChunkX != _lastPlayerChunkX || playerChunkY != _lastPlayerChunkY || radiusChanged)
@@ -514,7 +608,7 @@ public class Playing
             {
                 foreach (var coord in loadedChunks)
                 {
-                    if (Program.Net.ChunkBiomes.TryGetValue(coord, out byte currentBiome))
+                    if (Program.Net.ChunkBiomes.TryGetValue(coord, out currentBiome))
                     {
                         bool isNew = !_chunkSnapshot.TryGetValue(coord, out byte oldBiome);
                         if (isNew || oldBiome != currentBiome)
@@ -591,7 +685,12 @@ public class Playing
             _wasRaidActive = RaidActive;
 
             // Damage Splash Detection & Particle Update
-            if (CurrentHealth < _lastLocalHealth) SpawnDamageSplash(LocalPlayer.Position + new Vector2(32, 32));
+            if (CurrentHealth < _lastLocalHealth) 
+            {
+                _damageFlashTimer = 0.2f;
+                _cameraShakeIntensity = 15f;
+                SpawnDamageSplash(LocalPlayer.Position + new Vector2(32, 32));
+            }
             _lastLocalHealth = CurrentHealth;
 
             foreach (var kvp in Others)
@@ -619,6 +718,18 @@ public class Playing
                 p.Position += p.Velocity * dt;
                 p.Rotation += p.AngularVelocity * dt;
                 p.Velocity *= (1.0f - dt * 1.5f); // Slight Air friction
+            }
+
+            // Update ember particles
+            for (int i = _emberParticles.Count - 1; i >= 0; i--)
+            {
+                var p = _emberParticles[i];
+                p.Life -= dt;
+                if (p.Life <= 0) { _emberParticles.RemoveAt(i); continue; }
+
+                p.Position += p.Velocity * dt;
+                p.Rotation += p.AngularVelocity * dt;
+            p.Velocity.Y -= 60f * dt; // Embers float upwards faster
             }
 
             ProcessPendingBlends();
@@ -674,7 +785,12 @@ public class Playing
             _playerArrows.Clear();
             // Find nearest two players and prepare arrow data
             List<(Player player, float distance)> sortedOthers = new();
-            foreach (var other in Others.Values.ToList())
+            List<Player> currentOthers;
+            lock (OthersLock)
+            {
+                currentOthers = Others.Values.ToList();
+            }
+            foreach (var other in currentOthers)
             {
                 float dist = Vector2.Distance(LocalPlayer.Position, other.Position);
                 sortedOthers.Add((other, dist));
@@ -727,9 +843,12 @@ public class Playing
 
             // Update player animations
             LocalPlayer.Update(dt);
-            foreach (var other in Others.Values)
+            lock (OthersLock)
             {
-                other.Update(dt);
+                foreach (var other in Others.Values)
+                {
+                    other.Update(dt);
+                }
             }
             HandleCombat();
 
@@ -743,13 +862,74 @@ public class Playing
             Cam.Update(LocalPlayer.Position, dt);
             Cam.Zoom = Settings.FOV;
 
+            // Apply Camera Shake
+            if (_cameraShakeIntensity > 0)
+            {
+                Cam.RaylibCamera.Offset += new Vector2(
+                    (float)(_rng.NextDouble() * 2 - 1) * _cameraShakeIntensity,
+                    (float)(_rng.NextDouble() * 2 - 1) * _cameraShakeIntensity
+                );
+            }
+
+            // Decay visual effects
+            if (_damageFlashTimer > 0) _damageFlashTimer -= dt;
+            if (_cameraShakeIntensity > 0) _cameraShakeIntensity = Math.Max(0, _cameraShakeIntensity - dt * 75f);
+
             // Only send updates if moved or rotated significantly to save bandwidth
             // but we send it every frame for now to ensure other players see smooth weapon rotation
             Program.Net.SendPosition(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Rotation);
         }
+
+        // Control Ash Fall effect based on current biome
+        currentBiome = 0;
+        playerChunkX = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
+        playerChunkY = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
+        bool hasBiome = _chunkSnapshot.TryGetValue((playerChunkX, playerChunkY), out currentBiome);
+        if (!hasBiome) // Fallback if snapshot not yet populated
+        {
+            lock (Program.Net.ChunkBiomesLock)
+            {
+                hasBiome = Program.Net.ChunkBiomes.TryGetValue((playerChunkX, playerChunkY), out currentBiome);
+            }
+        }
+        // Ash should fall in both Ashen Wastelands and Lava Pools
+        if (hasBiome && (currentBiome == 8 || currentBiome == 9)) _ashFallAlpha = Math.Min(1.0f, _ashFallAlpha + dt * 0.5f); // Fade in
+        else _ashFallAlpha = Math.Max(0.0f, _ashFallAlpha - dt * 0.5f); // Fade out
+
+        // Dust Storm logic: Only visible in Desert (2) or Beach (5)
+        if (hasBiome && (currentBiome == 2 || currentBiome == 5)) _dustStormAlpha = Math.Min(1.0f, _dustStormAlpha + dt * 0.5f);
+        else _dustStormAlpha = Math.Max(0.0f, _dustStormAlpha - dt * 0.5f);
+
+        // Ambient Embers for Ashen Wastelands and Lava Pools
+        if (runGameLogic)
+        {
+            Random r = new Random();
+            // Check current and neighbors for Lava (9) or Ashen (8) to decide what to spawn
+            bool isNearLava = false;
+            bool isNearAshen = false;
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    if (_chunkSnapshot.TryGetValue((playerChunkX + dx, playerChunkY + dy), out byte b)) {
+                        if (b == 9) isNearLava = true;
+                        if (b == 8) isNearAshen = true;
+                    }
+                }
+            }
+
+            if ((isNearLava || isNearAshen) && r.Next(0, 100) < 15) {
+                Vector2 randomOffset = new Vector2(r.Next(-500, 500), r.Next(-500, 500));
+                // If nearby lava, 60% chance for orange, else red-ash
+                Color col = (isNearLava && r.Next(0, 10) < 6) ? new Color(255, 140, 20, 255) : new Color(110, 50, 45, 255);
+                SpawnEmber(LocalPlayer.Position + new Vector2(32, 32) + randomOffset, col);
+            }
+        }
         
         // --- Global Death/Kill Detection ---
-        var currentOtherNames = Others.Keys.ToList();
+        List<string> currentOtherNames;
+        lock (OthersLock)
+        {
+            currentOtherNames = Others.Keys.ToList();
+        }
         foreach (var name in _lastOtherNames)
         {
             if (!currentOtherNames.Contains(name))
@@ -768,9 +948,12 @@ public class Playing
         _lastOtherNames = currentOtherNames;
         
         // Cache positions for the next frame's death detection
-        _lastOtherPositions.Clear();
-        foreach (var kvp in Others) {
-            _lastOtherPositions[kvp.Key] = kvp.Value.Position;
+        lock (OthersLock)
+        {
+            _lastOtherPositions.Clear();
+            foreach (var kvp in Others) {
+                _lastOtherPositions[kvp.Key] = kvp.Value.Position;
+            }
         }
 
     }
@@ -812,6 +995,18 @@ public class Playing
                             AddChatMessage("SYSTEM", $"Time set to {Env.CurrentTime:F1}s");
                         }
                     }
+                    else if (_chatInput.Equals("superspeed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _playerBaseSpeed = 3500f; // Make player super fast
+                        _isSuperSpeedActive = true;
+                        AddChatMessage("SYSTEM", "Superspeed activated!");
+                    }
+                    else if (_chatInput.Equals("normalspeed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _playerBaseSpeed = 350f; // Revert to normal speed
+                        _isSuperSpeedActive = false;
+                        AddChatMessage("SYSTEM", "Normal speed restored.");
+                    }
                     else
                     {
                         Program.Net.SendChat(_chatInput);
@@ -821,6 +1016,22 @@ public class Playing
             }
             if (Raylib.IsKeyPressed(KeyboardKey.Escape)) _isChatting = false; // Close chat on escape
         }
+    }
+
+    private void SpawnEmber(Vector2 pos, Color col)
+    {
+        Random r = new Random();
+        float life = (float)(r.NextDouble() * 1.2f + 0.6f); // Longer life (0.6s to 1.8s)
+        _emberParticles.Add(new DamageParticle {
+            Position = pos + new Vector2(r.Next(-15, 15), r.Next(-5, 5)),
+            Velocity = new Vector2(r.Next(-30, 30), r.Next(-150, -40)), // Higher velocity
+            Life = life,
+            MaxLife = life,
+            ParticleColor = col,
+            Size = (float)(r.NextDouble() * 2 + 2),
+            Rotation = (float)(r.NextDouble() * 360),
+            AngularVelocity = (float)(r.NextDouble() * 400 - 200)
+        });
     }
 
     private void SpawnDamageSplash(Vector2 pos)
@@ -889,9 +1100,14 @@ public class Playing
 
     private void HandleMovement(float dt)
     {
-        float baseSpeed = 350f;
-        if (LocalPlayer.IsBlocking) baseSpeed *= 0.55f; // 45% slow down while blocking
-        
+        float currentSpeed = _playerBaseSpeed;
+        bool isMoving = false;
+        int cx = 0, cy = 0;
+        byte biome = 0;
+        bool hasBiome = false;
+
+        if (LocalPlayer.IsBlocking && !_isSuperSpeedActive) currentSpeed *= 0.55f; // 45% slow down while blocking, unless superspeed is active
+
         Vector2 direction = Vector2.Zero;
         if (Raylib.IsKeyDown(KeyboardKey.W)) direction.Y -= 1;
         if (Raylib.IsKeyDown(KeyboardKey.S)) direction.Y += 1;
@@ -903,18 +1119,28 @@ public class Playing
         
         if (direction != Vector2.Zero)
         {
-            // Normalize ensures that diagonal movement is not faster than cardinal movement
-            LocalPlayer.Position += Vector2.Normalize(direction) * baseSpeed * dt;
+            // Normalize ensures that diagonal movement is not faster than cardinal movement, then apply currentSpeed
+            LocalPlayer.Position += Vector2.Normalize(direction) * currentSpeed * dt;
+        }
+
+        isMoving = direction != Vector2.Zero;
+        cx = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
+        cy = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
+
+        hasBiome = _chunkSnapshot.TryGetValue((cx, cy), out biome);
+
+        // Spawn Embers in Ashen Wastelands and Lava Pools
+        if (isMoving && !Program.IsPaused)
+        {
+            // Use unique colors for different biomes: Ash Gray for Ashen, Bright Orange for Lava
+            if (biome == 8 && new Random().Next(0, 100) < 15) 
+                SpawnEmber(LocalPlayer.Position + new Vector2(32, 58), new Color(110, 50, 45, 255));
+            else if (biome == 9 && new Random().Next(0, 100) < 15)
+                SpawnEmber(LocalPlayer.Position + new Vector2(32, 58), new Color(255, 140, 20, 255));
         }
 
         // --- Footstep Sound Logic ---
-        int cx = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
-        int cy = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
-
-        // Lookup biome with fallback to network cache if snapshot isn't ready
-        byte biome = 0;
-        bool hasBiome = _chunkSnapshot.TryGetValue((cx, cy), out biome);
-        if (!hasBiome) // Fallback if snapshot not yet populated
+        if (!hasBiome) 
         {
             lock (Program.Net.ChunkBiomesLock)
             {
@@ -934,11 +1160,10 @@ public class Playing
                 5 => "beach",
                 6 => "stonypeaks", // Brimstone fallback
                 7 => "river", // River
+                8 => "stonypeaks", // Ashen Wastelands fallback
                 _ => ""
             };
         }
-
-        bool isMoving = direction != Vector2.Zero;
         bool shouldPlay = isMoving && !string.IsNullOrEmpty(targetFootstep) && !Program.IsPaused;
 
         // Crossfade logic: if the target changed, move current to fading, and start new
@@ -1056,7 +1281,7 @@ public class Playing
     private Color CalculateBlendedColor(int cx, int cy, byte myBiome)
     {
         Color baseCol = GetBiomeBaseColor(myBiome, cx, cy);
-        if (myBiome == 7) return baseCol; // Rivers stay sharp
+        if (myBiome == 7 || myBiome == 9) return baseCol; // Rivers and Lava stay sharp
 
         // OPTIMIZATION: Homogeneity Check.
         // If all 8 immediate neighbors are the same biome, skip the heavy blending math.
@@ -1148,7 +1373,11 @@ public class Playing
         Color shadowCol = new Color(0, 0, 0, 120);
 
         // Shadows for Players and Raiders
-        var allPlayers = Others.Values.ToList();
+        List<Player> allPlayers;
+        lock (OthersLock)
+        {
+            allPlayers = Others.Values.ToList();
+        }
         allPlayers.Add(LocalPlayer);
         foreach(var p in allPlayers)
         {
@@ -1171,21 +1400,27 @@ public class Playing
         // Optimization: Calculate screen bounds to skip drawing off-screen chunks
         Vector2 screenTopLeft = Raylib.GetScreenToWorld2D(new Vector2(0, 0), Cam.RaylibCamera);
         Vector2 screenBottomRight = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), Cam.RaylibCamera);
-        int margin = chunkSize * 2;
+        
+        // Calculate visible chunk range instead of iterating over thousands of loaded chunks
+        int minX = (int)MathF.Floor(screenTopLeft.X / chunkSize) - 1;
+        int maxX = (int)MathF.Ceiling(screenBottomRight.X / chunkSize) + 1;
+        int minY = (int)MathF.Floor(screenTopLeft.Y / chunkSize) - 1;
+        int maxY = (int)MathF.Ceiling(screenBottomRight.Y / chunkSize) + 1;
 
-        foreach (var coord in loadedChunks)
+        // 1. Terrain Pass
+        for (int y = minY; y <= maxY; y++)
         {
-            float wx = coord.Item1 * chunkSize;
-            float wy = coord.Item2 * chunkSize;
-
-            // Frustum Culling: Only draw if the chunk is visible
-            if (wx + chunkSize < screenTopLeft.X - margin || wx > screenBottomRight.X + margin || 
-                wy + chunkSize < screenTopLeft.Y - margin || wy > screenBottomRight.Y + margin) continue;
-
-            if (!_blendedColorCache.TryGetValue(coord, out Color drawColor))
-                if (_chunkSnapshot.TryGetValue(coord, out byte b)) drawColor = GetBiomeBaseColor(b, coord.Item1, coord.Item2); else continue;
-
-            Raylib.DrawRectangle((int)wx, (int)wy, chunkSize, chunkSize, drawColor);
+            for (int x = minX; x <= maxX; x++)
+            {
+                var coord = (x, y);
+                if (!_blendedColorCache.TryGetValue(coord, out Color drawColor))
+                {
+                    if (_chunkSnapshot.TryGetValue(coord, out byte b)) 
+                        drawColor = GetBiomeBaseColor(b, x, y); 
+                    else continue;
+                }
+                Raylib.DrawRectangle(x * chunkSize, y * chunkSize, chunkSize, chunkSize, drawColor);
+            }
         }
         
         // Draw Raid Boundary Visuals (Red forcefield ring)
@@ -1197,97 +1432,82 @@ public class Playing
             Raylib.DrawRing(activeOutpostCenter, boundaryRadius - thickness / 2, boundaryRadius + thickness / 2, 0, 360, 360, new Color(255, 0, 0, 180));
         }
 
-        // Feature Pass - Rendered Top to Bottom (Y-Sorting) for correct overlap
-        var sortedFeatures = loadedChunks
-            .Where(coord => {
-                float wx = coord.Item1 * chunkSize;
-                float wy = coord.Item2 * chunkSize;
-                return !(wx + chunkSize < screenTopLeft.X - margin || wx > screenBottomRight.X + margin || 
-                         wy + chunkSize < screenTopLeft.Y - margin || wy > screenBottomRight.Y + margin);
-            })
-            .Where(coord => _featureSnapshot.TryGetValue(coord, out byte feature) && feature != 0)
-            .OrderBy(coord => coord.Item2) // Draw low Y (top) first, high Y (bottom) last
-            .ToList();
-
-        foreach (var coord in sortedFeatures)
+        // 2. Feature Pass - Rendered Top to Bottom (Y-Sorting)
+        // Iterating by Y automatically provides Y-sorting without Linq.OrderBy overhead.
+        for (int y = minY; y <= maxY; y++)
         {
-            float wx = coord.Item1 * chunkSize;
-            float wy = coord.Item2 * chunkSize;
-            _featureSnapshot.TryGetValue(coord, out byte feature);
-
-            string texName = "";
-            bool isSmall = false;
-            FeatureType type = (FeatureType)feature;
-
-            switch (type)
+            for (int x = minX; x <= maxX; x++)
             {
-                case FeatureType.LargeTree: texName = "large_tree"; break;
-                case FeatureType.SmallTree: texName = "small_tree"; break;
-                case FeatureType.MeadowHedge: texName = "meadow_hedge"; isSmall = true; break;
-                case FeatureType.MeadowFlowers: texName = "meadow_flowers"; isSmall = true; break;
-                case FeatureType.Stone: texName = "stone"; isSmall = true; break;
-                case FeatureType.PalmTree: texName = "palm_tree"; break;
-                case FeatureType.DesertLog: texName = "desert_log"; isSmall = true; break;
-                case FeatureType.Tumbleweed: texName = "tumbleweed"; isSmall = true; break;
-                case FeatureType.OasisDesert: texName = "oasis_desert"; break;
-                case FeatureType.BeachUmbrella: texName = "beach_umbrella"; isSmall = true; break;
-                case FeatureType.Sailboat: texName = "sailboat"; break;
-                case FeatureType.SulfurSpring: texName = "sulfur_spring"; break;
-            }
+                var coord = (x, y);
+                if (!_featureSnapshot.TryGetValue(coord, out byte feature) || feature == 0) continue;
+
+                float wx = x * chunkSize;
+                float wy = y * chunkSize;
+                FeatureType type = (FeatureType)feature;
+                string texName = type switch {
+                    FeatureType.LargeTree => "large_tree",
+                    FeatureType.SmallTree => "small_tree",
+                    FeatureType.MeadowHedge => "meadow_hedge",
+                    FeatureType.MeadowFlowers => "meadow_flowers",
+                    FeatureType.Stone => "stone",
+                    FeatureType.PalmTree => "palm_tree",
+                    FeatureType.DesertLog => "desert_log",
+                    FeatureType.Tumbleweed => "tumbleweed",
+                    FeatureType.OasisDesert => "oasis_desert",
+                    FeatureType.BeachUmbrella => "beach_umbrella",
+                    FeatureType.Sailboat => "sailboat",
+                    FeatureType.SulfurSpring => "sulfur_spring",
+                    _ => ""
+                };
 
                 if (string.IsNullOrEmpty(texName)) continue;
-
                 var tex = AssetManager.GetTexture(texName);
+                if (tex.Id == 0) continue;
 
-                if (tex.Id != 0)
+                bool isSmall = (type == FeatureType.MeadowHedge || type == FeatureType.MeadowFlowers || 
+                                type == FeatureType.Stone || type == FeatureType.DesertLog || 
+                                type == FeatureType.Tumbleweed || type == FeatureType.BeachUmbrella);
+
+                if (isSmall)
                 {
-                    if (isSmall)
-                    {
-                    float scale = ((type == FeatureType.MeadowFlowers) ? 0.35f : 0.5f) * 2.0f;
-                        Rectangle source = new Rectangle(0, 0, tex.Width, tex.Height);
-
-                        Rectangle dest = new Rectangle(
-                            wx + 8,
-                            wy + 8,
-                            tex.Width * scale,
-                            tex.Height * scale
-                        );
-
-                        Vector2 origin = new Vector2(
-                            (tex.Width * scale) / 2f,
-                            tex.Height * scale
-                        );
-
-                        Raylib.DrawTexturePro(
-                            tex,
-                            source,
-                            dest,
-                            origin,
-                            0f,
-                            Color.White
-                        );
-                    }
-                    else
-                    {
+                    float scale = (type == FeatureType.MeadowFlowers ? 0.35f : 0.5f) * 2.0f;
+                    Raylib.DrawTexturePro(tex, new Rectangle(0, 0, tex.Width, tex.Height), 
+                        new Rectangle(wx + 8, wy + 8, tex.Width * scale, tex.Height * scale), 
+                        new Vector2((tex.Width * scale) / 2f, tex.Height * scale), 0f, Color.White);
+                }
+                else
+                {
                     float scale = 4.0f;
-                    Rectangle source = new Rectangle(0, 0, tex.Width, tex.Height);
-                    Rectangle dest = new Rectangle(wx + 8, wy + 16, tex.Width * scale, tex.Height * scale);
-                    Vector2 origin = new Vector2((tex.Width * scale) / 2f, tex.Height * scale);
-                    Raylib.DrawTexturePro(tex, source, dest, origin, 0f, Color.White);
-                    }
+                    Raylib.DrawTexturePro(tex, new Rectangle(0, 0, tex.Width, tex.Height), 
+                        new Rectangle(wx + 8, wy + 16, tex.Width * scale, tex.Height * scale), 
+                        new Vector2((tex.Width * scale) / 2f, tex.Height * scale), 0f, Color.White);
                 }
             }
+        }
 
         // Draw Shadows (now in world space, correctly positioned)
         DrawShadows();
 
         // Render Players - Sorted Top to Bottom (Y-Sorting)
-        var playersToDraw = Others.Values.ToList();
+        List<Player> playersToDraw;
+        lock (OthersLock)
+        {
+            playersToDraw = Others.Values.ToList();
+        }
         playersToDraw.Add(LocalPlayer);
         foreach (var p in playersToDraw.OrderBy(p => p.Position.Y))
         {
             p.Draw();
             Debug.DrawHitbox(p.Position);
+        }
+
+        // Draw Visual Bombs
+        Texture2D bombTex = AssetManager.GetTexture("brimstalker_bomb");
+        foreach (var b in _visualBombs) {
+            if (bombTex.Id != 0) {
+                Raylib.DrawTexturePro(bombTex, new Rectangle(0, 0, bombTex.Width, bombTex.Height), 
+                    new Rectangle(b.Position.X, b.Position.Y, 32, 32), new Vector2(16, 16), b.Rotation, Color.White);
+            }
         }
 
         // Draw Structures last in the world-space pass to ensure they are on top of everything
@@ -1326,6 +1546,17 @@ public class Playing
             // Layer 3: Specular highlight (top-left virtual pixel)
             float hSize = MathF.Max(pSize, s * 0.5f);
             Raylib.DrawRectangleV(drawPos, new Vector2(hSize, hSize), new Color(255, 100, 100, (int)(t * 150)));
+        }
+
+        // Draw Ember Particles
+        foreach (var p in _emberParticles)
+        {
+            float t = p.Life / p.MaxLife;
+            Color col = p.ParticleColor;
+            col.A = (byte)(t * 255);
+            
+            // Draw as small glowing squares
+            Raylib.DrawRectanglePro(new Rectangle(p.Position.X, p.Position.Y, p.Size, p.Size), new Vector2(p.Size/2f, p.Size/2f), p.Rotation, col);
         }
 
         // Draw Cloud Particles as blocky clusters for a pixelated look
@@ -1369,7 +1600,7 @@ public class Playing
         Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "saturation"), Env.Saturation, ShaderUniformDataType.Float);
         Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "contrast"), Env.Contrast, ShaderUniformDataType.Float);
         Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "fogDensity"), Env.FogDensity, ShaderUniformDataType.Float);
-        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "dustDensity"), Env.DustDensity, ShaderUniformDataType.Float);
+        Raylib.SetShaderValue(_postShader, Raylib.GetShaderLocation(_postShader, "dustDensity"), Env.DustDensity * _dustStormAlpha, ShaderUniformDataType.Float);
 
         // Pass missing color uniforms for fog and dust
         Vector4 fogCol = new Vector4(Env.FogColor.R / 255f, Env.FogColor.G / 255f, Env.FogColor.B / 255f, 1f);
@@ -1409,9 +1640,12 @@ public class Playing
             Raylib.DrawCircleGradient(sw / 2, sh / 2, radius, new Color(255, 0, 0, 0), new Color(255, 0, 0, Math.Clamp(alpha, 0, 255)));
         }
 
-        foreach (var other in Others.Values)
+        lock (OthersLock)
         {
-            other.DrawOverheadHearts(other.Position + new Vector2(32, 32), other.Health, other.MaxHealth);
+            foreach (var other in Others.Values)
+            {
+                other.DrawOverheadHearts(other.Position + new Vector2(32, 32), other.Health, other.MaxHealth);
+            }
         }
         LocalPlayer.DrawOverheadHearts(LocalPlayer.Position + new Vector2(32, 32), CurrentHealth, MaxHealth);
 
@@ -1472,7 +1706,8 @@ public class Playing
                 
             Raylib.DrawRectangleRoundedLines(new Rectangle(x, y, barW, barH), 0.5f, 4, Color.Black);
             
-            string raidTitle = RaidActive ? "RAID ENCOUNTER" : "RAID APPROACHING...";
+            bool isBrimstalkerActive = Others.Values.Any(o => o.Name == "Brimstalker");
+            string raidTitle = isBrimstalkerActive ? "BRIMSTALKER" : (RaidActive ? "RAID ENCOUNTER" : "RAID APPROACHING...");
             int tw = Raylib.MeasureText(raidTitle, 22);
             Raylib.DrawText(raidTitle, sw / 2 - tw / 2, y - 28, 22, new Color(255, 200, 0, 255));
         }
@@ -1515,6 +1750,13 @@ public class Playing
             Raylib.DrawRectangle(0, sh / 2 - 60, sw, 120, new Color(0, 0, 0, (int)(160 * alpha)));
             // Big white text
             Raylib.DrawText(tutText, sw / 2 - tutTextWidth / 2, sh / 2 - 15, tutFontSize, new Color(255, 255, 255, (int)(255 * alpha)));
+        }
+
+        // Draw Damage Flash Overlay
+        if (_damageFlashTimer > 0)
+        {
+            float flashAlpha = (_damageFlashTimer / 0.2f) * 0.4f; // Max 40% alpha
+            Raylib.DrawRectangle(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(255, 0, 0, (int)(flashAlpha * 255)));
         }
 
         InvMenu.Draw();
@@ -1563,6 +1805,9 @@ public class Playing
 
         // Draw God Rays over the atmosphere
         DrawGodRays();
+
+        // Draw Weather Overlays (Rain, Dust, Ash)
+        DrawWeatherOverlays();
 
         // Render tooltips last so they are on top of everything
         HotbarUI.RenderTooltip();
@@ -1718,11 +1963,35 @@ public class Playing
                 Raylib.DrawLineV(screenP, screenP + new Vector2(2, 15), new Color(150, 180, 255, (int)(rainInt * 200)));
             }
         }
-        float dustInt = Env.GetWeatherIntensity(WeatherType.DustStorm);
+        float dustInt = Env.GetWeatherIntensity(WeatherType.DustStorm) * _dustStormAlpha;
         if (dustInt > 0.1f)
         {
             foreach (var p in _dustParticles)
-                Raylib.DrawCircleV(new Vector2(p.X % sw, p.Y % sh), 8, new Color(180, 150, 80, (int)(dustInt * 200))); // Larger and more opaque dust particles
+            {
+                int dx = (int)(p.X % sw);
+                int dy = (int)(p.Y % sh);
+                // Replaced large blobs with grainy tiny rectangles
+                int dSize = (dx + dy) % 3 + 1; 
+                Raylib.DrawRectangle(dx, dy, dSize, dSize, new Color(165, 135, 75, (int)(dustInt * 170)));
+            }
+        }
+
+        // Draw Ash Fall particles
+        if (_ashFallAlpha > 0.01f)
+        {
+            for (int i = 0; i < _ashFallParticles.Count; i++)
+            {
+                Vector2 p = _ashFallParticles[i];
+                int ax = (int)p.X;
+                int ay = (int)p.Y;
+
+                // Deterministic variance based on index rather than screen position.
+                // This prevents flakes from changing size as they move, which was making overlaps look "glitchy".
+                int aSize = (i % 4) + 1;
+                int gray = 100 + (i % 50); 
+                
+                Raylib.DrawRectangle(ax, ay, aSize, aSize, new Color(gray, gray, gray, (int)(_ashFallAlpha * 150))); 
+            }
         }
     }
 
@@ -1769,7 +2038,11 @@ public class Playing
 
     private void DrawPlayerList()
     {
-        var players = Others.Values.ToList();
+        List<Player> players;
+        lock (OthersLock)
+        {
+            players = Others.Values.ToList();
+        }
         players.Add(LocalPlayer);
 
         // Show up to 30 nearest players
@@ -1792,6 +2065,88 @@ public class Playing
         }
     }
 
+    private Color GetBiomeBaseColor(byte biome, int cx = 0, int cy = 0)
+    {
+        if (biome < _biomeColors.Length)
+        {
+            Color baseCol = _biomeColors[biome];
+            float noise = (Perlin.Noise(cx * 0.20f, cy * 0.20f) + 1f) * 0.5f;
+
+            if (biome == 7) // River: shimmer effect
+            {
+                int hash = (cx * 73856093) ^ (cy * 19349663);
+                float duration = 0.8f + (Math.Abs(hash) % 401 / 1000f);
+                int timeStep = (int)(Raylib.GetTime() / duration);
+                int shimmerHash = hash ^ (timeStep * 1103515245);
+                int offset = (Math.Abs(shimmerHash) % 21) - 10;
+
+                return new Color(
+                    (int)Math.Clamp(baseCol.R + offset, 0, 255),
+                    (int)Math.Clamp(baseCol.G + offset, 0, 255),
+                    (int)Math.Clamp(baseCol.B + offset, 0, 255),
+                    255);
+            }
+            if (biome == 8) // Ashen Wastelands
+            {
+                if (noise < 0.5f)
+                {
+                    float t = noise * 2.0f;
+                    return new Color(
+                        (int)(34 + (51 - 34) * t),
+                        (int)(14 + (15 - 14) * t),
+                        (int)(14 + (15 - 14) * t),
+                        255);
+                }
+                float t2 = (noise - 0.5f) * 2.0f;
+                return new Color(
+                    (int)(51 + (53 - 51) * t2),
+                    (int)(15 + (43 - 15) * t2),
+                    (int)(15 + (43 - 15) * t2),
+                    255);
+            }
+            if (biome == 9) // Lava Pool
+            {
+                if (noise < 0.5f)
+                {
+                    float t = noise * 2.0f;
+                    return new Color(
+                        (int)(146 + (202 - 146) * t),
+                        (int)(18 + (28 - 18) * t),
+                        (int)(18 + (28 - 18) * t),
+                        255);
+                }
+                float t2 = (noise - 0.5f) * 2.0f;
+                return new Color(
+                    (int)(202 + (223 - 202) * t2),
+                    (int)(28 + (139 - 28) * t2),
+                    (int)(28 + (28 - 28) * t2),
+                    255);
+            }
+
+            // Standard biome noise variation
+            switch ((BiomeType)biome)
+            {
+                case BiomeType.Meadow:
+                    return new Color((int)(145 + (95 - 145) * noise), (int)(205 + (155 - 205) * noise), (int)(135 + (85 - 135) * noise), 255);
+                case BiomeType.Forest:
+                    return new Color((int)(50 + (10 - 50) * noise), (int)(115 + (75 - 115) * noise), (int)(65 + (25 - 65) * noise), 255);
+                case BiomeType.Desert:
+                    return new Color((int)(230 + (170 - 230) * noise), (int)(205 + (145 - 205) * noise), (int)(140 + (80 - 140) * noise), 255);
+                case BiomeType.StonyPeaks:
+                    return new Color((int)(140 + (90 - 140) * noise), (int)(145 + (95 - 145) * noise), (int)(155 + (105 - 155) * noise), 255);
+                case BiomeType.Ocean:
+                    return new Color((int)(45 + (10 - 45) * noise), (int)(80 + (45 - 80) * noise), (int)(145 + (110 - 145) * noise), 255);
+                case BiomeType.Beach:
+                    return new Color((int)(240 + (190 - 240) * noise), (int)(220 + (170 - 220) * noise), (int)(180 + (130 - 180) * noise), 255);
+                case BiomeType.BrimstoneSprings:
+                    return new Color((int)(210 + (255 - 210) * noise), (int)(95 + (145 - 95) * noise), (int)(60 + (110 - 60) * noise), 255);
+                default:
+                    return baseCol;
+            }
+        }
+        return Color.Gray;
+    }
+
     private void DrawCooldownUI()
     {
         if (InvMenu.Visible || Program.IsPaused || _isChatting) return;
@@ -1812,46 +2167,5 @@ public class Playing
             Raylib.DrawRectangle(x - 1, y - 1, barWidth + 2, barHeight + 2, new Color(0, 0, 0, 120));
             Raylib.DrawRectangle(x, y, (int)(barWidth * charge), barHeight, barColor);
         }
-    }
-
-    private Color GetBiomeBaseColor(byte biome, int cx = 0, int cy = 0)
-    {
-        // OPTIMIZATION: Use a pre-allocated array lookup instead of a switch statement.
-        if (biome < _biomeColors.Length) // Ensure biome index is valid
-        {
-            Color baseCol = _biomeColors[biome];
-            if (biome == 7) // River: shimmer effect with independent rerolling
-            {
-                int hash = (cx * 73856093) ^ (cy * 19349663);
-                float duration = 0.8f + (Math.Abs(hash) % 401 / 1000f); // 0.8s to 1.2s
-                int timeStep = (int)(Raylib.GetTime() / duration);
-
-                // Mix timeStep into the hash to pick a "new number" every interval
-                int shimmerHash = hash ^ (timeStep * 1103515245);
-                int offset = (Math.Abs(shimmerHash) % 21) - 10; // Range: -10 to +10 brightness
-
-                return new Color(
-                    (int)Math.Clamp(baseCol.R + offset, 0, 255),
-                    (int)Math.Clamp(baseCol.G + offset, 0, 255),
-                    (int)Math.Clamp(baseCol.B + offset, 0, 255),
-                    255);
-            }
-            return baseCol;
-        }
-        return Color.Gray;
-    }
-
-    private Color AverageColors(params Color[] colors)
-    {
-        int r = 0, g = 0, b = 0, a = 0;
-        foreach (var c in colors)
-        {
-            r += c.R; g += c.G; b += c.B; a += c.A;
-        }
-        return new Color( // Average the color components
-            (byte)(r / colors.Length), 
-            (byte)(g / colors.Length), 
-            (byte)(b / colors.Length), 
-            (byte)(a / colors.Length));
     }
 }

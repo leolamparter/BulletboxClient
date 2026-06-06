@@ -12,7 +12,9 @@ public enum BiomeType : byte
     Ocean = 4,
     Beach = 5,
     BrimstoneSprings = 6,
-    River = 7
+    River = 7,
+    AshenWastelands = 8,
+    LavaPool = 9
 }
 
 public enum ServerFeatureType : byte
@@ -52,6 +54,17 @@ public class ServerChunk
     }
 }
 
+public class ServerBomb
+{
+    public Vector2 Position;
+    public Vector2 Velocity;
+    public float Timer;
+    public string OwnerName;
+    public string TargetPlayer;
+    public bool Exploded;
+    public ServerBomb(Vector2 pos, Vector2 vel, string owner) { Position = pos; Velocity = vel; Timer = 1.0f; OwnerName = owner; Exploded = false; TargetPlayer = ""; }
+}
+
 public class RaiderBot
 {
     public string Name;
@@ -66,6 +79,11 @@ public class RaiderBot
     public float FleeTimer = 0f;
     public Vector2? WanderTarget = null;
     public float WanderWaitTimer = 0f;
+    public int ChargePhase = 0; // 0: None, 1: Prep, 2: Charging
+    public float ChargeTimer = 0f;
+    public float ChargeCooldown = 15f; // Initial delay
+    public Vector2 ChargeDirection = Vector2.Zero;
+    public bool HasDealtChargeDamage = false;
     public RaiderBot(string name, Vector2 pos) { Name = name; Position = pos; }
 }
 
@@ -80,6 +98,7 @@ public class ServerWorld
     public float RaidTimer = 30f;
     public bool RaidActive = false;
     public List<RaiderBot> Raiders = new();
+    public List<ServerBomb> ActiveBombs = new();
     public Vector2? ActiveRaidOutpostPosition = null; // NEW FIELD HERE
 
     // Storage for world structures like Raid Outposts
@@ -124,6 +143,8 @@ public class ServerWorld
             // Dedicated low-frequency noise for rare but massive oceans
             float oceanNoise = (Perlin.Noise(sx * 0.003f, sy * 0.003f) + 1f) * 0.5f;
             float scale = 0.008f;
+            // Low frequency noise for massive biomes like Ashen Wastelands
+            float ashenNoise = (Perlin.Noise(sx * 0.0015f, sy * 0.0015f) + 1f) * 0.5f;
             float riverNoise = Perlin.Noise(sx * 0.025f, sy * 0.025f);
             float noise = Perlin.Noise(sx * scale, sy * scale);
             float noise2 = Perlin.Noise(sx * scale * 0.5f + 1000, sy * scale * 0.5f - 1000) * 0.5f;
@@ -136,6 +157,13 @@ public class ServerWorld
                 biome = BiomeType.Ocean;
             } else if (oceanNoise < 0.30f) {
                 biome = BiomeType.Beach;
+            } else if (ashenNoise > 0.68f) {
+                // Lava Pool pockets inside Ashen Wastelands
+                // frequency lowered to 0.008f for massive lakes and threshold dropped to 0.50
+                float lavaNoise = (Perlin.Noise(sx * 0.008f, sy * 0.008f) + 1f) * 0.5f;
+                // Buffer (0.695 > 0.68) ensures a thin border of ash always surrounds the lava
+                if (ashenNoise > 0.695f && lavaNoise > 0.50f) biome = BiomeType.LavaPool;
+                else biome = BiomeType.AshenWastelands;
             } else if (Math.Abs(riverNoise) < 0.035f) {
                 biome = BiomeType.River;
             } else if (n > 0.80f) {
@@ -238,6 +266,11 @@ public class ServerWorld
 
                 // Ensure outposts don't spawn within 180 chunks of the world origin (spawn)
                 if (Math.Sqrt(chunkX * chunkX + chunkY * chunkY) < 180) canPlaceOutpost = false;
+
+                // Restriction: Prevent spawning in Ocean, River, Lava, or Ashen biomes
+                if (biome == BiomeType.Ocean || biome == BiomeType.River || 
+                    biome == BiomeType.LavaPool || biome == BiomeType.AshenWastelands) 
+                    canPlaceOutpost = false;
 
                 if (canPlaceOutpost)
                 {

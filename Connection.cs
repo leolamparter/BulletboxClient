@@ -103,28 +103,31 @@ public class Connection
                     // Safety check: Don't process if the game state changed
                     if (Program.PlayingState != null)
                     {
-                        if (Program.PlayingState.Others.TryGetValue(name, out var other))
+                        lock (Program.PlayingState.OthersLock)
                         {
-                            other.Position = new Vector2(x, y);
-                            other.Rotation = rot;
-                            other.HeldItemID = heldId;
-                            other.OffHandItemID = offHandId;
-                            other.IsBlocking = isBlocking;
-                            other.Health = hp;
-                            other.MaxHealth = maxHp;
-                        }
-                        else if (name != Program.CurrentUser.Username)
-                        {
-                            Console.WriteLine($"Player {name} entered the vision range.");
-                            Player newRemotePlayer = new Player(name, new Vector2(x, y));
-                            newRemotePlayer.Color = Raylib_cs.Color.White; // Remote players are white
-                            newRemotePlayer.Rotation = rot;
-                            newRemotePlayer.HeldItemID = heldId;
-                            newRemotePlayer.OffHandItemID = offHandId;
-                            newRemotePlayer.IsBlocking = isBlocking;
-                            newRemotePlayer.Health = hp;
-                            newRemotePlayer.MaxHealth = maxHp;
-                            Program.PlayingState.Others[name] = newRemotePlayer;
+                            if (Program.PlayingState.Others.TryGetValue(name, out var other))
+                            {
+                                other.Position = new Vector2(x, y);
+                                other.Rotation = rot;
+                                other.HeldItemID = heldId;
+                                other.OffHandItemID = offHandId;
+                                other.IsBlocking = isBlocking;
+                                other.Health = hp;
+                                other.MaxHealth = maxHp;
+                            }
+                            else if (name != Program.CurrentUser.Username)
+                            {
+                                Console.WriteLine($"Player {name} entered the vision range.");
+                                Player newRemotePlayer = new Player(name, new Vector2(x, y));
+                                newRemotePlayer.Color = Raylib_cs.Color.White; // Remote players are white
+                                newRemotePlayer.Rotation = rot;
+                                newRemotePlayer.HeldItemID = heldId;
+                                newRemotePlayer.OffHandItemID = offHandId;
+                                newRemotePlayer.IsBlocking = isBlocking;
+                                newRemotePlayer.Health = hp;
+                                newRemotePlayer.MaxHealth = maxHp;
+                                Program.PlayingState.Others[name] = newRemotePlayer;
+                            }
                         }
                     }
                 }
@@ -181,7 +184,10 @@ public class Connection
                     string name = _reader.ReadString();
                     if (Program.PlayingState != null)
                     {
-                        Program.PlayingState.Others.Remove(name);
+                        lock (Program.PlayingState.OthersLock)
+                        {
+                            Program.PlayingState.Others.Remove(name);
+                        }
                         Console.WriteLine($"Player {name} left the world.");
                     }
                 }
@@ -223,6 +229,17 @@ public class Connection
                 else if (packetId == 14) // Shield Block Sound Trigger
                 {
                     AudioManager.PlaySound("shield_block");
+                }
+                else if (packetId == 16) // Incoming Bomb
+                {
+                    float startX = _reader.ReadSingle();
+                    float startY = _reader.ReadSingle();
+                    float velX = _reader.ReadSingle();
+                    float velY = _reader.ReadSingle();
+
+                    if (Program.PlayingState != null) {
+                        Program.PlayingState.SpawnVisualBomb(new Vector2(startX, startY), new Vector2(velX, velY));
+                    }
                 }
             }
         }

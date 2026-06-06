@@ -45,10 +45,10 @@ public class Player
             if (AttackAnimProgress < 0) AttackAnimProgress = 0;
         }
 
-        bool isRaider = Name.StartsWith("Raider");
+        bool isMob = Name.StartsWith("Raider") || Name == "Brimstalker";
 
         // Initialize and Update the pixelated texture OUTSIDE of the Camera Mode for players
-        if (!_initialized && !isRaider)
+        if (!_initialized && !isMob)
         {
             _pixelTarget = Raylib.LoadRenderTexture(24, 24);
             Raylib.SetTextureFilter(_pixelTarget.Texture, TextureFilter.Point);
@@ -62,7 +62,7 @@ public class Player
             _initialized = true;
         }
 
-        if (!isRaider)
+        if (!isMob)
         {
             // Render the spinning shapes into the buffer
             Raylib.BeginTextureMode(_pixelTarget);
@@ -179,27 +179,29 @@ public class Player
 
         // 3. Execution Pass - Draw body first, then items on top
         bool isRaider = Name.StartsWith("Raider");
-        if (isRaider)
+        bool isBrimstalker = Name == "Brimstalker";
+        if (isRaider || isBrimstalker)
         {
-            string raiderTexKey = "raidshroomer_idle";
+            string texPrefix = isRaider ? "raidshroomer" : "brimstalker";
+            string mobTexKey = $"{texPrefix}_idle";
             
             // Determine animation state based on health and proximity
-            if (Health < 30)
+            if (Health < MaxHealth * 0.3f)
             {
-                raiderTexKey = "raidshroomer_afraid";
+                mobTexKey = $"{texPrefix}_afraid";
             }
             else if (Program.PlayingState != null)
             {
                 // Vision/Detection range (45 chunks * 16 units)
                 float dist = Vector2.Distance(Position, Program.PlayingState.LocalPlayer.Position);
-                if (dist < 720f) raiderTexKey = "raidshroomer_angry";
+                if (dist < 720f) mobTexKey = $"{texPrefix}_angry";
             }
 
-            Texture2D raiderTex = AssetManager.GetTexture(raiderTexKey);
-            if (raiderTex.Id != 0)
+            Texture2D mobTex = AssetManager.GetTexture(mobTexKey);
+            if (mobTex.Id != 0)
             {
-                Rectangle raiderSource = new Rectangle(0, 0, raiderTex.Width, raiderTex.Height);
-                Raylib.DrawTexturePro(raiderTex, raiderSource, dest, destOrigin, 0f, Color.White);
+                Rectangle mobSource = new Rectangle(0, 0, mobTex.Width, mobTex.Height);
+                Raylib.DrawTexturePro(mobTex, mobSource, dest, destOrigin, 0f, Color.White);
             }
         }
         else
@@ -209,8 +211,12 @@ public class Player
         }
 
         // Always draw items in front of the player body
-        DrawWeapon();
-        DrawOffhand();
+        // Brimstalker has no weapons or offhand items drawn
+        if (Name != "Brimstalker")
+        {
+            DrawWeapon();
+            DrawOffhand();
+        }
     }
 
     public void DrawOverheadHearts(Vector2 worldPos, int health, int max)
@@ -246,7 +252,7 @@ public class Player
         }
 
         // Draw Name Tag
-        if (!Name.StartsWith("Raider"))
+        if (!Name.StartsWith("Raider") && Name != "Brimstalker")
         {
             int textWidth = Raylib.MeasureText(Name, 20);
             int xPos = (int)(screenPos.X - (textWidth / 2));

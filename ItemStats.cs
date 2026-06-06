@@ -21,6 +21,7 @@ public class ItemStats
         { (byte)'K', new ItemStats("Kanabo", "kanabo") },
         { (byte)'H', new ItemStats("Shield", "shield") },
         { (byte)'B', new ItemStats("Bow", "bow") },
-        { (byte)'R', new ItemStats("Raidshroom", "raidshroom") }
+        { (byte)'R', new ItemStats("Raidshroom", "raidshroom") },
+        { (byte)'M', new ItemStats("Brimstone Powder", "brimstone_powder") }
     };
 }
