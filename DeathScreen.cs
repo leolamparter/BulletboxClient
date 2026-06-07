@@ -12,9 +12,9 @@ public class DeathScreen
         titleButton = new UIButton("BACK TO TITLE", Vector2.Zero, 30);
     }
 
-    public void Update()
+    public void Update(bool windowResized)
     {
-        HomeScreen.background.Update();
+        HomeScreen.background.Update(windowResized);
         float centerX = Raylib.GetScreenWidth() / 2f;
         float centerY = Raylib.GetScreenHeight() / 2f;
 

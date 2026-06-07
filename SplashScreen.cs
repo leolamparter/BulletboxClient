@@ -34,7 +34,7 @@ public class SplashScreen
         _hasFinished = false;
     }
 
-    public void Update()
+    public void Update(bool windowResized)
     {
         if (_hasFinished) return;
 

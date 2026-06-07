@@ -11,9 +11,9 @@ public class LoginScreen {
         loginButton = new UIButton("CONFIRM & PLAY", Vector2.Zero, 30, true);
     }
 
-    public void Update() {
+    public void Update(bool windowResized) {
         // Keep background moving
-        HomeScreen.background.Update();
+        HomeScreen.background.Update(windowResized);
 
         // 1. CLICK TO SELECT FIELDS
         Vector2 mouse = Raylib.GetMousePosition();

@@ -63,6 +63,15 @@ public class VisualBomb
     public VisualBomb(Vector2 pos, Vector2 vel) { Position = pos; Velocity = vel; Life = 1.0f; Rotation = 0; }
 }
 
+public class VisualGust // NEW
+{
+    public Vector2 Position;
+    public Vector2 Velocity;
+    public float Life;
+    public float Rotation;
+    public VisualGust(Vector2 pos, Vector2 vel) { Position = pos; Velocity = vel; Life = 1.0f; Rotation = 0; }
+}
+
 // The StructureType enum and Structure class are now in BulletboxClient/Structure.cs
 public class Playing
 {
@@ -94,7 +103,11 @@ public class Playing
     private List<Vector2> _moteParticles = new();
     private List<CloudParticle> _cloudParticles = new();
     private List<ShootingStar> _shootingStars = new();
+
     private List<VisualBomb> _visualBombs = new();
+    private readonly object _bombsLock = new();
+    private List<VisualGust> _visualGusts = new(); // NEW
+    private readonly object _gustsLock = new();
 
     // Optimization Caches
     private Dictionary<(int, int), byte> _chunkSnapshot = new();
@@ -104,6 +117,8 @@ public class Playing
     private List<(int, int)> _sortedPending = new();
     private int _lastPlayerChunkX = int.MaxValue;
     private int _lastPlayerChunkY = int.MaxValue;
+    private int _lastScreenWidth;
+    private int _lastScreenHeight;
 
     // Combat Timers
     private float _cAttackTimer = 0f; 
@@ -112,6 +127,7 @@ public class Playing
     private int _lastLocalHealth = 100;
     private float _damageFlashTimer = 0f;
     private float _cameraShakeIntensity = 0f;
+    private float _endSequenceTimer = -1f;
     private float _hungerHealTimer = 0f;
     private Dictionary<string, int> _lastOthersHealth = new();
     private List<DamageParticle> _damageParticles = new();
@@ -132,10 +148,14 @@ public class Playing
     private string _fadingFootstepKey = "";
     private float _fadingFootstepVolume = 0f;
 
+    // Ambience State
+    private Dictionary<string, float> _ambientVolumes = new();
+
     // Chat and UI State
     private bool _isChatting = false;
     private string _chatInput = "";
     private List<(string sender, string msg, float time)> _chatLog = new();
+    private readonly object _chatLock = new();
 
     // Death and Kill Tracking State
     private List<string> _lastOtherNames = new();
@@ -144,6 +164,7 @@ public class Playing
     private float _lastAttackTime = 0f;
 
     // Raid State (Moved from Structure to Player/Session level)
+    public byte CurrentBiome = 0;
     public bool RaidActive = false;
     public float RaidBossHealth = 0f;
     public float RaidTimer = 9999f;
@@ -188,7 +209,7 @@ public class Playing
         Cam = new CameraManager(LocalPlayer.Position);
 
         // Initialize starting items: Sword only
-        PlayerInventory.Slots[0].ItemID = (byte)'S';
+        PlayerInventory.Slots[0].ItemID = "iron_sword";
 
         Hotbar = new HotbarUI(PlayerInventory);
         InvMenu = new InventoryUI(PlayerInventory);
@@ -199,6 +220,8 @@ public class Playing
         _postShader = Raylib.LoadShader(null, "resources/shaders/post_process.fs");
         _sceneTarget = Raylib.LoadRenderTexture(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
         _lightingTarget = Raylib.LoadRenderTexture(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+        _lastScreenWidth = Raylib.GetScreenWidth();
+        _lastScreenHeight = Raylib.GetScreenHeight();
         InitializeWeatherParticles();
 
         // Initial shader uniform setup
@@ -228,14 +251,12 @@ public class Playing
         AssetManager.LoadTexture("sailboat", "resources/textures/feature/sailboat.png");
         AssetManager.LoadTexture("sulfur_spring", "resources/textures/feature/sulfur_spring.png");
 
-        // Re-verify these paths match your request
-        AssetManager.LoadTexture("kanabo", "resources/textures/item/kanabo.png");
-        AssetManager.LoadTexture("spear", "resources/textures/item/spear.png");
-        AssetManager.LoadTexture("sword", "resources/textures/item/sword.png");
-        AssetManager.LoadTexture("raidshroom", "resources/textures/item/raidshroom.png");
-        AssetManager.LoadTexture("brimstone_powder", "resources/textures/item/brimstone_powder.png");
-        AssetManager.LoadTexture("shield", "resources/textures/item/shield.png");
-        AssetManager.LoadTexture("bow", "resources/textures/item/bow.png"); // Assuming 'bow.png' exists
+        // Dynamically load all item textures from the ItemStats library
+        // This ensures keys like "iron_sword" or "wooden_axe" are correctly mapped to their files
+        foreach (var entry in ItemStats.Library)
+        {
+            AssetManager.LoadTexture(entry.Value.TextureKey, $"resources/textures/item/{entry.Value.TextureKey}.png");
+        }
 
         // Load raidshroomer textures
         AssetManager.LoadTexture("raidshroomer_idle", "resources/textures/entity/raidshroomer/idle.png");
@@ -247,6 +268,11 @@ public class Playing
         AssetManager.LoadTexture("brimstalker_angry", "resources/textures/entity/brimstalker/angry.png");
         AssetManager.LoadTexture("brimstalker_afraid", "resources/textures/entity/brimstalker/afraid.png");
         
+        // Load Vortex textures (NEW)
+        AssetManager.LoadTexture("vortex_idle", "resources/textures/entity/vortex/idle.png");
+        AssetManager.LoadTexture("vortex_angry", "resources/textures/entity/vortex/angry.png");
+        AssetManager.LoadTexture("vortex_afraid", "resources/textures/entity/vortex/afraid.png");
+        AssetManager.LoadTexture("vortex_gust", "resources/textures/entity/vortex/gust.png"); // Projectile texture
         // Load Flicker texture
         AssetManager.LoadTexture("flicker_idle", "resources/textures/entity/flicker/idle.png");
         AssetManager.LoadTexture("flicker_angry", "resources/textures/entity/flicker/angry.png");
@@ -282,6 +308,14 @@ public class Playing
         AudioManager.LoadSound("player_death", "resources/sounds/player/death.mp3");
         AudioManager.LoadSound("player_died", "resources/sounds/player/died.mp3");
         AudioManager.LoadSound("player_kill", "resources/sounds/player/kill.mp3");
+
+        // Ambience
+        AudioManager.LoadSound("amb_brimstone", "resources/sounds/ambience/brimstone.mp3");
+        AudioManager.LoadSound("amb_desert", "resources/sounds/ambience/desert.mp3");
+        AudioManager.LoadSound("amb_raid", "resources/sounds/ambience/raid.mp3");
+        AudioManager.LoadSound("amb_rain", "resources/sounds/ambience/rain.mp3");
+        AudioManager.LoadSound("amb_storm", "resources/sounds/ambience/storm.mp3");
+        AudioManager.LoadSound("amb_volcano", "resources/sounds/ambience/volcano.mp3");
 
         // Load Hunger Bar textures
         for (int i = 0; i <= 110; i += 10)
@@ -382,43 +416,122 @@ public class Playing
         }
     }
 
+    private void RedistributeParticles(int oldW, int oldH, int newW, int newH)
+    {
+        if (oldW <= 0 || oldH <= 0) return;
+        Vector2 ratio = new Vector2((float)newW / oldW, (float)newH / oldH);
+
+        for (int i = 0; i < _rainParticles.Count; i++) _rainParticles[i] *= ratio;
+        for (int i = 0; i < _dustParticles.Count; i++) _dustParticles[i] *= ratio;
+        for (int i = 0; i < _moteParticles.Count; i++) _moteParticles[i] *= ratio;
+        for (int i = 0; i < _ashFallParticles.Count; i++) _ashFallParticles[i] *= ratio;
+    }
+
     public void SpawnVisualBomb(Vector2 start, Vector2 velocity)
     {
-        _visualBombs.Add(new VisualBomb(start, velocity));
+        lock (_bombsLock)
+        {
+            _visualBombs.Add(new VisualBomb(start, velocity));
+        }
     }
 
     private void UpdateVisualBombs(float dt)
     {
-        for (int i = _visualBombs.Count - 1; i >= 0; i--) {
-            var b = _visualBombs[i];
-            
-            // Client-side Aimbot: Gently curve the visual projectile toward the local player
-            Vector2 playerCenter = LocalPlayer.Position + new Vector2(32, 32);
-            Vector2 desiredDir = Vector2.Normalize(playerCenter - b.Position);
-            b.Velocity = Vector2.Normalize(Vector2.Lerp(Vector2.Normalize(b.Velocity), desiredDir, dt * 3.5f)) * b.Velocity.Length();
-            
-            b.Position += b.Velocity * dt;
-            b.Life -= dt;
-            b.Rotation += dt * 360f;
-            
-            bool exploded = b.Life <= 0;
-            if (!exploded)
-            {
-                float dist = Vector2.Distance(LocalPlayer.Position + new Vector2(32, 32), b.Position);
-                if (dist < 25f) exploded = true;
-            }
+        lock (_bombsLock)
+        {
+            for (int i = _visualBombs.Count - 1; i >= 0; i--) {
+                var b = _visualBombs[i];
+                
+                // Client-side Aimbot: Gently curve the visual projectile toward the local player
+                Vector2 playerCenter = LocalPlayer.Position + new Vector2(32, 32);
+                Vector2 desiredDir = Vector2.Normalize(playerCenter - b.Position);
+                b.Velocity = Vector2.Normalize(Vector2.Lerp(Vector2.Normalize(b.Velocity), desiredDir, dt * 3.5f)) * b.Velocity.Length();
+                
+                b.Position += b.Velocity * dt;
+                b.Life -= dt;
+                b.Rotation += dt * 360f;
+                
+                bool exploded = b.Life <= 0;
+                if (!exploded)
+                {
+                    float dist = Vector2.Distance(LocalPlayer.Position + new Vector2(32, 32), b.Position);
+                    if (dist < 25f) exploded = true;
+                }
 
-            if (exploded) {
-                SpawnDeathPuff(b.Position); // Visual explosion
-                _visualBombs.RemoveAt(i);
+                if (exploded) {
+                    SpawnDeathPuff(b.Position); // Visual explosion
+                    _visualBombs.RemoveAt(i);
+                }
+            }
+        }
+    }
+
+    public bool IsBossActive()
+    {
+        lock (OthersLock) { return Others.Values.Any(o => o.Name == "Brimstalker"); }
+    }
+
+    private void UpdateAudioSystem(float dt, byte biome, bool raid)
+    {
+        if (_endSequenceTimer >= 0) return;
+
+        // --- Ambience Management ---
+        void ManageAmbience(string key, bool active, float maxVol = 0.15f) // Reduced default maxVol
+        {
+            if (!_ambientVolumes.ContainsKey(key)) _ambientVolumes[key] = 0f;
+            
+            if (active && !Program.IsPaused) // Ambience should still pause with the game
+            {
+                if (!AudioManager.IsSoundPlaying(key)) AudioManager.PlaySound(key);
+                _ambientVolumes[key] = Math.Min(_ambientVolumes[key] + dt * 0.4f, maxVol);
+            }
+            else
+            {
+                _ambientVolumes[key] = Math.Max(_ambientVolumes[key] - dt * 0.4f, 0f);
+                if (_ambientVolumes[key] <= 0 && AudioManager.IsSoundPlaying(key)) AudioManager.StopSound(key);
+            }
+            
+            if (AudioManager.IsSoundPlaying(key))
+                AudioManager.SetVolume(key, _ambientVolumes[key]);
+        }
+
+        ManageAmbience("amb_brimstone", biome == 6);
+        ManageAmbience("amb_desert", biome == 2);
+        ManageAmbience("amb_raid", raid); // Raid ambience should still play if raid is active
+        ManageAmbience("amb_rain", Env.GetWeatherIntensity(WeatherType.Rain) > 0.4f);
+        ManageAmbience("amb_storm", (biome == 2 || biome == 5) && Env.GetWeatherIntensity(WeatherType.DustStorm) > 0.4f); // Added biome check
+        ManageAmbience("amb_volcano", biome == 9);
+    }
+
+    public void SpawnVisualGust(Vector2 start, Vector2 velocity) // NEW
+    {
+        lock (_gustsLock)
+        {
+            _visualGusts.Add(new VisualGust(start, velocity));
+        }
+    }
+
+    private void UpdateVisualGusts(float dt) // NEW
+    {
+        lock (_gustsLock)
+        {
+            for (int i = _visualGusts.Count - 1; i >= 0; i--) {
+                var g = _visualGusts[i];
+                g.Position += g.Velocity * dt;
+                g.Life -= dt;
+                g.Rotation += dt * 720f; // Faster rotation for gust
+                if (g.Life <= 0) { _visualGusts.RemoveAt(i); }
             }
         }
     }
 
     public void AddChatMessage(string sender, string msg)
     {
-        _chatLog.Add((sender, msg, (float)Raylib.GetTime()));
-        if (_chatLog.Count > 50) _chatLog.RemoveAt(0);
+        lock (_chatLock)
+        {
+            _chatLog.Add((sender, msg, (float)Raylib.GetTime()));
+            if (_chatLog.Count > 50) _chatLog.RemoveAt(0);
+        }
     }
 
     public void ApplyKnockback(Vector2 force)
@@ -426,12 +539,10 @@ public class Playing
         _kbVelocity += force * 15f; // Multiplier to turn 'distance' into 'velocity'
     } 
 
-    public void Update()
+    public void Update(float dt, bool windowResized)
     {
-        float dt = Raylib.GetFrameTime();
         int playerChunkX = 0;
         int playerChunkY = 0;
-        byte currentBiome = 0;
 
         // Condition for game logic to run:
         // Game logic pauses if Program.IsPaused is true AND we are connected to an integrated server (127.0.0.1).
@@ -440,7 +551,7 @@ public class Playing
         bool runGameLogic = !isMenuOpen || (Program.Net.IsConnected() && Program.LastIP != "127.0.0.1");
 
         // Handle Window Resizing for Render Textures
-        if (Raylib.IsWindowResized())
+        if (windowResized)
         {
             Raylib.UnloadRenderTexture(_sceneTarget);
             Raylib.UnloadRenderTexture(_lightingTarget);
@@ -449,12 +560,33 @@ public class Playing
             int sh = Raylib.GetScreenHeight();
             _sceneTarget = Raylib.LoadRenderTexture(sw, sh);
             _lightingTarget = Raylib.LoadRenderTexture(sw, sh);
+
+            RedistributeParticles(_lastScreenWidth, _lastScreenHeight, sw, sh);
+            _lastScreenWidth = sw;
+            _lastScreenHeight = sh;
         }
 
         // Update Environment
         Env.Update(dt, RaidActive);
         UpdateWeatherParticles(dt);
         UpdateVisualBombs(dt);
+        UpdateVisualGusts(dt); // NEW
+
+        if (_endSequenceTimer >= 0)
+        {
+            _endSequenceTimer += dt;
+            Program.IsEnding = true;
+            Env.TargetWeather = WeatherType.Clear;
+            Env.CurrentWeather = WeatherType.Clear;
+            Env.WeatherTransition = 1.0f;
+            
+            if (_endSequenceTimer > 25.0f) // Return home once credits have finished scrolling
+            {
+                Program.IsEnding = false;
+                Program.DisconnectAndLeave();
+            }
+            return; // Halt regular gameplay updates during the sequence
+        }
 
         // Raid Tutorial Trigger (Info Message)
         if (!RaidActive && RaidTimer <= 3.0f && RaidTimer > 0 && !Program.CurrentUser.RaidTutorialFinnished && _raidTutorialStage == RaidTutorialStage.None)
@@ -500,12 +632,31 @@ public class Playing
             // Hotbar Right-Click Consumption
             if (Raylib.IsMouseButtonPressed(MouseButton.Right) && !InvMenu.Visible && !_isChatting)
             {
+                bool interacted = false;
+                Vector2 worldMouse = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), Cam.RaylibCamera);
+                foreach (var s in Structures.Values) {
+                    // Check for right-clicking structures (Chests) - Server validates IsCompleted
+                    if (Vector2.Distance(worldMouse, s.Position) < 150f && s.Type == StructureType.RaidOutpost) {
+                        Program.Net.SendOpenChest(s.ChunkX, s.ChunkY);
+                        interacted = true;
+                        break;
+                    }
+                }
+
                 var stack = PlayerInventory.Slots[_selectedHotbarIndex];
-                if (stack.ItemID == (byte)'R' && CurrentHunger < 110)
+                if (!interacted && stack.ItemID == "brimstone_pearl")
+                {
+                    _endSequenceTimer = 0f;
+                    Program.IsEnding = true;
+                    AudioManager.StopAll();
+                    interacted = true;
+                }
+
+                if (!interacted && stack.ItemID == "raidshroom" && CurrentHunger < 110)
                 {
                     CurrentHunger = Math.Min(110, CurrentHunger + 15);
                     if (stack.Count > 1) PlayerInventory.Slots[_selectedHotbarIndex].Count--;
-                    else PlayerInventory.Slots[_selectedHotbarIndex] = new ItemStack((byte)' ', 0);
+                    else PlayerInventory.Slots[_selectedHotbarIndex] = new ItemStack("none", 0);
                     Program.Net.SendConsumeItem((byte)_selectedHotbarIndex);
                 }
             }
@@ -613,12 +764,12 @@ public class Playing
             {
                 foreach (var coord in loadedChunks)
                 {
-                    if (Program.Net.ChunkBiomes.TryGetValue(coord, out currentBiome))
+                    if (Program.Net.ChunkBiomes.TryGetValue(coord, out CurrentBiome))
                     {
                         bool isNew = !_chunkSnapshot.TryGetValue(coord, out byte oldBiome);
-                        if (isNew || oldBiome != currentBiome)
+                        if (isNew || oldBiome != CurrentBiome)
                         {
-                            _chunkSnapshot[coord] = currentBiome;
+                            _chunkSnapshot[coord] = CurrentBiome;
                             
                             // Dirty a 3x3 area (radius 1) for re-blending.
                             for (int x = -1; x <= 1; x++) {
@@ -698,14 +849,17 @@ public class Playing
             }
             _lastLocalHealth = CurrentHealth;
 
-            foreach (var kvp in Others)
+            lock (OthersLock)
             {
-                if (!_lastOthersHealth.TryGetValue(kvp.Key, out int lastH)) {
+                foreach (var kvp in Others)
+                {
+                    if (!_lastOthersHealth.TryGetValue(kvp.Key, out int lastH)) {
+                        _lastOthersHealth[kvp.Key] = kvp.Value.Health;
+                        continue;
+                    }
+                    if (kvp.Value.Health < lastH) SpawnDamageSplash(kvp.Value.Position + new Vector2(32, 32));
                     _lastOthersHealth[kvp.Key] = kvp.Value.Health;
-                    continue;
                 }
-                if (kvp.Value.Health < lastH) SpawnDamageSplash(kvp.Value.Position + new Vector2(32, 32));
-                _lastOthersHealth[kvp.Key] = kvp.Value.Health;
             }
 
             // Cleanup stale health tracking
@@ -742,7 +896,7 @@ public class Playing
             // Update Blocking State
             bool wasBlocking = LocalPlayer.IsBlocking;
             LocalPlayer.OffHandItemID = PlayerInventory.Slots[24].ItemID;
-            LocalPlayer.IsBlocking = Raylib.IsMouseButtonDown(MouseButton.Right) && LocalPlayer.OffHandItemID == (byte)'H';
+            LocalPlayer.IsBlocking = Raylib.IsMouseButtonDown(MouseButton.Right) && LocalPlayer.OffHandItemID == "shield";
             
             if (LocalPlayer.IsBlocking != wasBlocking) {
                 Program.Net.SendBlockingState(LocalPlayer.IsBlocking);
@@ -886,23 +1040,22 @@ public class Playing
         }
 
         // Control Ash Fall effect based on current biome
-        currentBiome = 0;
         playerChunkX = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
         playerChunkY = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
-        bool hasBiome = _chunkSnapshot.TryGetValue((playerChunkX, playerChunkY), out currentBiome);
+        bool hasBiome = _chunkSnapshot.TryGetValue((playerChunkX, playerChunkY), out CurrentBiome);
         if (!hasBiome) // Fallback if snapshot not yet populated
         {
             lock (Program.Net.ChunkBiomesLock)
             {
-                hasBiome = Program.Net.ChunkBiomes.TryGetValue((playerChunkX, playerChunkY), out currentBiome);
+                hasBiome = Program.Net.ChunkBiomes.TryGetValue((playerChunkX, playerChunkY), out CurrentBiome);
             }
         }
         // Ash should fall in both Ashen Wastelands and Lava Pools
-        if (hasBiome && (currentBiome == 8 || currentBiome == 9)) _ashFallAlpha = Math.Min(1.0f, _ashFallAlpha + dt * 0.5f); // Fade in
+        if (hasBiome && (CurrentBiome == 8 || CurrentBiome == 9)) _ashFallAlpha = Math.Min(1.0f, _ashFallAlpha + dt * 0.5f); // Fade in
         else _ashFallAlpha = Math.Max(0.0f, _ashFallAlpha - dt * 0.5f); // Fade out
 
         // Dust Storm logic: Only visible in Desert (2) or Beach (5)
-        if (hasBiome && (currentBiome == 2 || currentBiome == 5)) _dustStormAlpha = Math.Min(1.0f, _dustStormAlpha + dt * 0.5f);
+        if (hasBiome && (CurrentBiome == 2 || CurrentBiome == 5)) _dustStormAlpha = Math.Min(1.0f, _dustStormAlpha + dt * 0.5f);
         else _dustStormAlpha = Math.Max(0.0f, _dustStormAlpha - dt * 0.5f);
 
         // Ambient Embers for Ashen Wastelands and Lava Pools
@@ -960,7 +1113,8 @@ public class Playing
                 _lastOtherPositions[kvp.Key] = kvp.Value.Position;
             }
         }
-
+        
+        UpdateAudioSystem(dt, CurrentBiome, RaidActive);
     }
 
     public void SetActiveRaidOutpost(Vector2? outpostPos)
@@ -1000,6 +1154,10 @@ public class Playing
                             AddChatMessage("SYSTEM", $"Time set to {Env.CurrentTime:F1}s");
                         }
                     }
+                else if (_chatInput.StartsWith("giveitem:"))
+                {
+                    Program.Net.SendChat(_chatInput);
+                }
                     else if (_chatInput.Equals("superspeed", StringComparison.OrdinalIgnoreCase))
                     {
                         _playerBaseSpeed = 3500f; // Make player super fast
@@ -1169,7 +1327,7 @@ public class Playing
                 _ => ""
             };
         }
-        bool shouldPlay = isMoving && !string.IsNullOrEmpty(targetFootstep) && !Program.IsPaused;
+        bool shouldPlay = isMoving && !string.IsNullOrEmpty(targetFootstep) && !Program.IsPaused && _endSequenceTimer < 0;
 
         // Crossfade logic: if the target changed, move current to fading, and start new
         if (shouldPlay && _currentFootstepKey != targetFootstep)
@@ -1336,7 +1494,7 @@ public class Playing
     {
         if (Raylib.IsMouseButtonPressed(MouseButton.Left) && !InvMenu.Visible) 
         { // Only attack if inventory is not open
-            byte heldId = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
+            string heldId = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
             var (dmg, kb, range) = WeaponStats.Calculate(heldId, _cAttackTimer, _cHitTimer);
 
             if (dmg > 0)
@@ -1346,13 +1504,17 @@ public class Playing
                 _lastAttackTime = (float)Raylib.GetTime();
                 
                 Vector2 worldMouse = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), Cam.RaylibCamera);
-                foreach (var other in Others.Values.ToList())
+                List<Player> combatTargets;
+                lock (OthersLock) { combatTargets = Others.Values.ToList(); }
+                foreach (var other in combatTargets)
                 {
                     Rectangle hitBox = new Rectangle(other.Position.X, other.Position.Y, 64, 64);
                     float dist = Vector2.Distance(LocalPlayer.Position, other.Position);
 
                     if (Raylib.CheckCollisionPointRec(worldMouse, hitBox) && dist <= range)
-                    {
+                    {   
+                        // Only allow attacking other players or raiders
+                        if (!other.Name.StartsWith("Raider") && !other.Name.StartsWith("Flicker") && !other.Name.StartsWith("Vortex") && other.Name != "Brimstalker" && other.Name != LocalPlayer.Name) continue;
                         Console.WriteLine($"Attacking {other.Name} for {dmg} dmg!");
                         _lastAttackedName = other.Name;
                         Program.Net.SendAttack(other.Name);
@@ -1508,10 +1670,13 @@ public class Playing
 
         // Draw Visual Bombs
         Texture2D bombTex = AssetManager.GetTexture("brimstalker_bomb");
-        foreach (var b in _visualBombs) {
-            if (bombTex.Id != 0) {
-                Raylib.DrawTexturePro(bombTex, new Rectangle(0, 0, bombTex.Width, bombTex.Height), 
-                    new Rectangle(b.Position.X, b.Position.Y, 32, 32), new Vector2(16, 16), b.Rotation, Color.White);
+        lock (_bombsLock)
+        {
+            foreach (var b in _visualBombs) {
+                if (bombTex.Id != 0) {
+                    Raylib.DrawTexturePro(bombTex, new Rectangle(0, 0, bombTex.Width, bombTex.Height), 
+                        new Rectangle(b.Position.X, b.Position.Y, 32, 32), new Vector2(16, 16), b.Rotation, Color.White);
+                }
             }
         }
 
@@ -1528,6 +1693,19 @@ public class Playing
                     structure.Position.Y - (tex.Height * scale) / 2f
                 );
                 Raylib.DrawTextureEx(tex, drawPos, 0f, scale, Color.White);
+            }
+        }
+
+        // Draw Visual Gusts (NEW)
+        Texture2D gustTex = AssetManager.GetTexture("vortex_gust");
+        lock (_gustsLock)
+        {
+            foreach (var g in _visualGusts) {
+                if (gustTex.Id != 0) {
+                    // Gusts are smaller, maybe 16x16, and rotate faster
+                    Raylib.DrawTexturePro(gustTex, new Rectangle(0, 0, gustTex.Width, gustTex.Height), 
+                        new Rectangle(g.Position.X, g.Position.Y, 16, 16), new Vector2(8, 8), g.Rotation, Color.White);
+                }
             }
         }
 
@@ -1711,7 +1889,8 @@ public class Playing
                 
             Raylib.DrawRectangleRoundedLines(new Rectangle(x, y, barW, barH), 0.5f, 4, Color.Black);
             
-            bool isBrimstalkerActive = Others.Values.Any(o => o.Name == "Brimstalker");
+            // Use the thread-safe 'playersToDraw' list we captured earlier in the Draw method
+            bool isBrimstalkerActive = playersToDraw.Any(o => o.Name == "Brimstalker");
             string raidTitle = isBrimstalkerActive ? "BRIMSTALKER" : (RaidActive ? "RAID ENCOUNTER" : "RAID APPROACHING...");
             int tw = Raylib.MeasureText(raidTitle, 22);
             Raylib.DrawText(raidTitle, sw / 2 - tw / 2, y - 28, 22, new Color(255, 200, 0, 255));
@@ -1774,10 +1953,9 @@ public class Playing
             Vector2 playerCenterPos = new Vector2(LocalPlayer.Position.X + 32, LocalPlayer.Position.Y + 32);
             float distToMouse = Vector2.Distance(playerCenterPos, worldMouse);
 
-            byte heldId = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
+            string heldId = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
             var (_, _, currentRange) = WeaponStats.Calculate(heldId, _cAttackTimer, _cHitTimer);
-
-            Color crossColor = (distToMouse <= currentRange && heldId != (byte)' ' && heldId != 0) ? Color.Green : Color.Red;
+            Color crossColor = (distToMouse <= currentRange && heldId != "none" && !string.IsNullOrEmpty(heldId) && currentRange > 0) ? Color.Green : Color.Red;
 
             // Visibility Optimization: Check background color for contrast
             int cx = (int)MathF.Floor(worldMouse.X / chunkSize);
@@ -1816,6 +1994,56 @@ public class Playing
 
         // Render tooltips last so they are on top of everything
         HotbarUI.RenderTooltip();
+
+        // --- Cinematic End Sequence Overlay ---
+        if (_endSequenceTimer >= 4.0f)
+        {
+            int sw = Raylib.GetScreenWidth();
+            int sh = Raylib.GetScreenHeight();
+            Raylib.DrawRectangle(0, 0, sw, sh, Color.Black);
+
+            if (_endSequenceTimer >= 5.0f)
+            {
+                string t1 = "BULLETBOX";
+                int fs1 = 80;
+                int w1 = Raylib.MeasureText(t1, fs1);
+                Raylib.DrawText(t1, sw / 2 - w1 / 2, sh / 2 - 120, fs1, Color.Yellow);
+            }
+
+            if (_endSequenceTimer >= 6.0f)
+            {
+                string t2 = "THE END";
+                int fs2 = 40;
+                int w2 = Raylib.MeasureText(t2, fs2);
+                Raylib.DrawText(t2, sw / 2 - w2 / 2, sh / 2 - 20, fs2, Color.White);
+            }
+
+            if (_endSequenceTimer >= 8.0f)
+            {
+                float scrollT = _endSequenceTimer - 8.0f;
+                float scrollY = sh - (scrollT * 60f); // 60 pixels per second
+                
+                int fsC = 25;
+                string[] credits = new string[] {
+                    "Lead developer:",
+                    "Leonard J. Lamparter",
+                    "(LeonardoDCapitan)",
+                    "",
+                    "Soundtrack Designer:",
+                    ".Winter",
+                    "",
+                    "",
+                    "THE END."
+                };
+
+                for (int i = 0; i < credits.Length; i++)
+                {
+                    int cw = Raylib.MeasureText(credits[i], fsC);
+                    Raylib.DrawText(credits[i], sw / 2 - cw / 2, (int)(scrollY + i * 35), fsC, Color.White);
+                }
+            }
+        }
+
         DrawNightVignetteOverlay(); // Draw night vignette absolutely last
     }
 
@@ -1934,11 +2162,14 @@ public class Playing
         // Pass other players or entities.
         // Limiting to 31 others + 1 local player for a total of 32 lights,
         // which is a common shader uniform array size limit.
-        foreach (var other in Others.Values.Take(31))
+        lock (OthersLock)
         {
-            Vector2 otherScreenPos = Raylib.GetWorldToScreen2D(other.Position + new Vector2(32, 32), Cam.RaylibCamera);
-            SetShaderLight(lightCount, otherScreenPos, Color.White, 200f, 0.8f);
-            lightCount++;
+            foreach (var other in Others.Values.Take(31))
+            {
+                Vector2 otherScreenPos = Raylib.GetWorldToScreen2D(other.Position + new Vector2(32, 32), Cam.RaylibCamera);
+                SetShaderLight(lightCount, otherScreenPos, Color.White, 200f, 0.8f);
+                lightCount++;
+            }
         }
 
         Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, "lightCount"), lightCount, ShaderUniformDataType.Int);
@@ -2009,29 +2240,32 @@ public class Playing
         int anchorY = sh - 80; // The Y-position for the most recent message
 
         int displayedCount = 0; // Track how many messages are drawn
-        // Iterate through the log backwards to keep the newest message at the bottom
-        for (int i = _chatLog.Count - 1; i >= 0; i--)
+        lock (_chatLock)
         {
-            if (displayedCount >= 10) break;
+            // Iterate through the log backwards to keep the newest message at the bottom
+            for (int i = _chatLog.Count - 1; i >= 0; i--)
+            {
+                if (displayedCount >= 10) break;
 
-            var entry = _chatLog[i];
-            float age = currentTime - entry.time;
-            
-            if (!_isChatting && age > 15.0f) continue;
+                var entry = _chatLog[i];
+                float age = currentTime - entry.time;
+                
+                if (!_isChatting && age > 15.0f) continue;
 
-            // Calculate fade alpha (stays 1.0 until 13s, then fades to 0 over the next 2s)
-            float alpha = 1.0f;
-            if (!_isChatting && age > 13.0f) alpha = 1.0f - ((age - 13.0f) / 2.0f);
+                // Calculate fade alpha (stays 1.0 until 13s, then fades to 0 over the next 2s)
+                float alpha = 1.0f;
+                if (!_isChatting && age > 13.0f) alpha = 1.0f - ((age - 13.0f) / 2.0f);
 
-            string text = $"[{entry.sender}]: {entry.msg}";
-            int textWidth = Raylib.MeasureText(text, fontSize);
-            int yPos = anchorY - (displayedCount * spacing);
+                string text = $"[{entry.sender}]: {entry.msg}";
+                int textWidth = Raylib.MeasureText(text, fontSize);
+                int yPos = anchorY - (displayedCount * spacing);
 
-            // Draw Minecraft-style semi-transparent background and text
-            Raylib.DrawRectangle(10, yPos - 2, textWidth + 20, fontSize + 4, new Color(40, 40, 40, (int)(160 * alpha)));
-            Raylib.DrawText(text, 20, yPos, fontSize, new Color(255, 255, 255, (int)(255 * alpha)));
+                // Draw Minecraft-style semi-transparent background and text
+                Raylib.DrawRectangle(10, yPos - 2, textWidth + 20, fontSize + 4, new Color(40, 40, 40, (int)(160 * alpha)));
+                Raylib.DrawText(text, 20, yPos, fontSize, new Color(255, 255, 255, (int)(255 * alpha)));
 
-            displayedCount++;
+                displayedCount++;
+            }
         }
 
         if (_isChatting)
@@ -2156,7 +2390,8 @@ public class Playing
     {
         if (InvMenu.Visible || Program.IsPaused || _isChatting) return;
 
-        byte heldId = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
+        string heldIdStr = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
+        string heldId = PlayerInventory.Slots[_selectedHotbarIndex].ItemID;
         if (WeaponStats.Library.TryGetValue(heldId, out var stats))
         {
             float charge = Math.Clamp(_cAttackTimer / stats.Cooldown, 0, 1);

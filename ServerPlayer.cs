@@ -7,9 +7,9 @@ using System.Collections.Generic;
 
 // Data structure must match client exactly
 public struct ServerItemStack {
-    public byte ItemID;
+    public string ItemID;
     public int Count;
-    public ServerItemStack(byte id, int count) { ItemID = id; Count = count; }
+    public ServerItemStack(string id, int count) { ItemID = id; Count = count; }
 }
 
 public class ServerPlayer
@@ -18,6 +18,7 @@ public class ServerPlayer
     public int Health = 100;
     public int MaxHealth = 100;
     public int Hunger = 100;
+    public Vector2 Position = Vector2.Zero; // Server's authoritative position
     public float Rotation = 0f;
     public bool IsBlocking = false;
     public int ViewRadius = 40;
@@ -28,6 +29,7 @@ public class ServerPlayer
     public BinaryWriter Writer;
     private DateTime _lastAttackTime = DateTime.MinValue;
     private DateTime _lastHitTime = DateTime.MinValue;
+    public Vector2 Velocity = Vector2.Zero; // For knockback
     public int SelectedSlot = 0;
 
     public float AshenTime = 0f;
@@ -37,6 +39,9 @@ public class ServerPlayer
 
     // The Server's source of truth
     public ServerItemStack[] Inventory = new ServerItemStack[25];
+    public ServerItemStack CraftingSlot1 = new ServerItemStack("none", 0);
+    public ServerItemStack CraftingSlot2 = new ServerItemStack("none", 0);
+    public Structure? CurrentOpenChest = null;
 
     public ServerPlayer(TcpClient client)
     {
@@ -46,7 +51,7 @@ public class ServerPlayer
         Writer = new BinaryWriter(_stream);
 
         // Initialize empty
-        for (int i = 0; i < 25; i++) Inventory[i] = new ServerItemStack((byte)' ', 0);
+        for (int i = 0; i < 25; i++) Inventory[i] = new ServerItemStack("none", 0);
     }
 
     public async Task Listen(ServerWorld world)
@@ -63,9 +68,10 @@ public class ServerPlayer
                     string clientVer = _reader.ReadString();
                     _reader.ReadString(); // password
                     
-                    world.UpdatePosition(Username, 400, 300);
+                    Position = new Vector2(400, 300); // Set initial position
+                    world.UpdatePosition(Username, Position.X, Position.Y);
                     
-                    Inventory[0] = new ServerItemStack((byte)'S', 1); // Sword
+                    Inventory[0] = new ServerItemStack("iron_sword", 1); // Starting weapon
 
                     lock (WriterLock)
                     {
@@ -80,8 +86,9 @@ public class ServerPlayer
                 {
                     float x = _reader.ReadSingle();
                     float y = _reader.ReadSingle();
+                    Position = new Vector2(x, y); // Update server's authoritative position
                     Rotation = _reader.ReadSingle();
-                    world.UpdatePosition(Username, x, y);
+                    world.UpdatePosition(Username, Position.X, Position.Y);
                     BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking, Health, MaxHealth);
                 }
                 else if (packetId == 2) // Slot Selection
@@ -93,14 +100,39 @@ public class ServerPlayer
                 {
                     byte from = _reader.ReadByte();
                     byte to = _reader.ReadByte();
+                    int amount = _reader.ReadInt32();
+
+                    // Helper to get a reference to the stack based on index
+                    bool IsValid(int idx) => (idx >= 0 && idx < 25) || idx == 100 || idx == 101;
                     
-                    if (from < 25 && to < 25)
+                    if (IsValid(from) && IsValid(to) && amount > 0)
                     {
-                        // Swap items in server memory
-                        ServerItemStack temp = Inventory[from];
-                        Inventory[from] = Inventory[to];
-                        Inventory[to] = temp;
+                        ServerItemStack source = GetStack(from);
+                        ServerItemStack target = GetStack(to);
+                        int actualAmount = Math.Min(amount, source.Count);
+
+                        if (target.ItemID == "none") {
+                            SetStack(to, new ServerItemStack(source.ItemID, actualAmount));
+                            source.Count -= actualAmount;
+                            SetStack(from, source);
+                        } else if (target.ItemID == source.ItemID) {
+                            int canTake = 99 - target.Count;
+                            int toMove = Math.Min(actualAmount, canTake);
+                            target.Count += toMove;
+                            source.Count -= toMove;
+                            SetStack(to, target);
+                            SetStack(from, source);
+                        } else if (actualAmount == source.Count) {
+                            // Full Swap
+                            SetStack(from, target);
+                            SetStack(to, source);
+                        }
+
+                        // Cleanup empty stacks
+                        if (GetStack(from).Count <= 0) SetStack(from, new ServerItemStack("none", 0));
+                        
                         SendFullInventory();
+                        SendCraftingSlots(CraftingSlot1, CraftingSlot2, GetCraftingPreview());
                     }
                 }
                 else if (packetId == 10) // Chunk Request
@@ -139,7 +171,7 @@ public class ServerPlayer
                 }
                 else if (packetId == 6) {
                     string victimName = _reader.ReadString();
-                    byte heldId = Inventory[SelectedSlot].ItemID; 
+                    string heldId = Inventory[SelectedSlot].ItemID; 
 
                     float elapsed = (float)(DateTime.Now - _lastAttackTime).TotalSeconds;
                     float timeSinceHit = (float)(DateTime.Now - _lastHitTime).TotalSeconds;
@@ -154,7 +186,7 @@ public class ServerPlayer
                         }
 
                         if (victim != null) {
-                            Vector2 myPos = world.PlayerLocations[this.Username];
+                            Vector2 myPos = this.Position; // Use server's authoritative position
                             Vector2 victimPos = world.PlayerLocations[victim.Username];
                             float dist = Vector2.Distance(myPos, victimPos);
                             
@@ -168,7 +200,7 @@ public class ServerPlayer
                                     lock (victim.WriterLock)
                                     {
                                         victim.Writer.Write((byte)7); 
-                                        victim.Writer.Write(dir.X * kb);
+                                        victim.Writer.Write(dir.X * kb); // Knockback is sent as a force
                                         victim.Writer.Write(dir.Y * kb);
                                         victim.Writer.Flush();
                                     }
@@ -176,7 +208,7 @@ public class ServerPlayer
                             }
                         } else {
                             var bot = world.Raiders.Find(b => b.Name == victimName);
-                            if (bot != null && Vector2.Distance(world.PlayerLocations[this.Username], bot.Position) <= range) {
+                            if (bot != null && Vector2.Distance(this.Position, bot.Position) <= range) {
                                 _lastAttackTime = DateTime.Now;
                                 _lastHitTime = DateTime.Now;
                                 bot.Health -= (int)dmg;
@@ -192,8 +224,9 @@ public class ServerPlayer
                                     lock (ServerProgram.ConnectedPlayers) {
                                         foreach (var p in ServerProgram.ConnectedPlayers) p.SendLeaveSignal(bot.Name);
                                     }
-                                    if (bot.Name.StartsWith("Raider")) AddItem((byte)'R', 1); // Reward player with a Raidshroom
-                                    if (bot.Name == "Brimstalker") AddItem((byte)'M', Random.Shared.Next(3, 6)); // Reward 3-5 Brimstone Powder
+                                    if (bot.Name.StartsWith("Raider")) AddItem("raidshroom", Random.Shared.Next(1, 4));
+                                    if (bot.Name.StartsWith("Vortex")) AddItem("pearl", Random.Shared.Next(1, 3));
+                                    if (bot.Name == "Brimstalker") AddItem("brimstone_powder", Random.Shared.Next(3, 6));
                                 }
                             }
                         }
@@ -204,18 +237,114 @@ public class ServerPlayer
                 else if (packetId == 8) // Chat Message
                 {
                     string msg = _reader.ReadString();
-                    BroadcastChat(Username, msg);
+                    if (msg.StartsWith("giveitem:"))
+                    {
+                        string[] parts = msg.Split(':');
+                        if (parts.Length >= 2 && parts[1].Length > 0)
+                        {
+                            string itemId = parts[1];
+                            int amount = 1;
+                            if (parts.Length >= 3 && int.TryParse(parts[2], out int parsedAmount))
+                            {
+                                amount = parsedAmount;
+                            }
+                            
+                            AddItem(itemId, amount);
+                            
+                            // Send a private confirmation message back to the player
+                            lock (WriterLock)
+                            {
+                                Writer.Write((byte)8);
+                                Writer.Write("SYSTEM");
+                                Writer.Write($"Gave {amount}x '{itemId}'");
+                                Writer.Flush();
+                            }
+                        }
+                    }
+                    else
+                    {
+                        BroadcastChat(Username, msg);
+                    }
+                }
+                else if (packetId == 18) // Crafting Request
+                {
+                    string input1Id = _reader.ReadString();
+                    int input1Count = _reader.ReadInt32();
+                    string input2Id = _reader.ReadString();
+                    int input2Count = _reader.ReadInt32();
+
+                    if (ItemStats.Recipes.TryGetValue((input1Id, input2Id), out string? outputId) ||
+                        ItemStats.Recipes.TryGetValue((input2Id, input1Id), out outputId))
+                    {
+                        // Consume from the actual crafting slots
+                        if (CraftingSlot1.Count > 0 && CraftingSlot2.Count > 0)
+                        {
+                            CraftingSlot1.Count--;
+                            if (CraftingSlot1.Count <= 0) CraftingSlot1 = new ServerItemStack("none", 0);
+                            CraftingSlot2.Count--;
+                            if (CraftingSlot2.Count <= 0) CraftingSlot2 = new ServerItemStack("none", 0);
+
+                            AddItem(outputId!, 1);
+                        }
+                    }
+
+                    // Send updated inventory and crafting slots back to client
+                    SendFullInventory();
+                    SendCraftingSlots(CraftingSlot1, CraftingSlot2, GetCraftingPreview());
+                }
+                else if (packetId == 19) // Open Chest Request
+                {
+                    int cx = _reader.ReadInt32();
+                    int cy = _reader.ReadInt32();
+                    if (world.Structures.TryGetValue((cx, cy), out var s) && s.IsCompleted) {
+                        CurrentOpenChest = s;
+                        SendChestInventory(s.ChestInventory);
+                    }
+                }
+                else if (packetId == 20) // Chest Item Move
+                {
+                    byte chestIdx = _reader.ReadByte();
+                    byte invIdx = _reader.ReadByte();
+                    bool toChest = _reader.ReadBoolean();
+                    int amount = _reader.ReadInt32();
+
+                    if (CurrentOpenChest != null && CurrentOpenChest.ChestInventory != null && chestIdx < 18 && invIdx < 25) {
+                        var src = toChest ? Inventory[invIdx] : CurrentOpenChest.ChestInventory[chestIdx];
+                        var dst = toChest ? CurrentOpenChest.ChestInventory[chestIdx] : Inventory[invIdx];
+                        amount = Math.Min(amount, src.Count);
+
+                        if (dst.ItemID == "none") {
+                            dst = new ServerItemStack(src.ItemID, amount);
+                            src.Count -= amount;
+                        } else if (dst.ItemID == src.ItemID) {
+                            int canTake = 99 - dst.Count;
+                            int toMove = Math.Min(amount, canTake);
+                            dst.Count += toMove;
+                            src.Count -= toMove;
+                        } else if (amount == src.Count) {
+                            var temp = src;
+                            src = dst;
+                            dst = temp;
+                        }
+
+                        if (src.Count <= 0) src = new ServerItemStack("none", 0);
+                        if (toChest) { Inventory[invIdx] = src; CurrentOpenChest.ChestInventory[chestIdx] = dst; }
+                        else { CurrentOpenChest.ChestInventory[chestIdx] = src; Inventory[invIdx] = dst; }
+
+                        SendFullInventory();
+                        SendChestInventory(CurrentOpenChest.ChestInventory);
+                    }
                 }
                 else if (packetId == 15) // Consume Item Request
                 {
                     byte slot = _reader.ReadByte();
-                    if (slot < 25 && Inventory[slot].ItemID == (byte)'R' && Inventory[slot].Count > 0 && Hunger < 110)
+                    if (slot < 25 && Inventory[slot].ItemID == "raidshroom" && Inventory[slot].Count > 0 && Hunger < 110)
                     {
                         Hunger = Math.Min(110, Hunger + 15);
                         Inventory[slot].Count--;
                         if (Inventory[slot].Count <= 0)
                         {
-                            Inventory[slot].ItemID = (byte)' ';
+                            Inventory[slot].ItemID = "none";
                             Inventory[slot].Count = 0;
                         }
                     }
@@ -238,7 +367,33 @@ public class ServerPlayer
         }
     }
 
-    public void AddItem(byte itemId, int amount)
+    public void SendChestInventory(ServerItemStack[]? chest) {
+        lock (WriterLock) {
+            Writer.Write((byte)19);
+            for (int i = 0; i < 18; i++) {
+                var item = (chest != null && i < chest.Length) ? chest[i] : new ServerItemStack("none", 0);
+                Writer.Write(item.ItemID);
+                Writer.Write(item.Count);
+            }
+            Writer.Flush();
+        }
+    }
+
+    public void SendCraftingSlots(ServerItemStack input1, ServerItemStack input2, ServerItemStack output)
+    {
+        lock (WriterLock)
+        {
+            Writer.Write((byte)18); // Packet ID 18 for crafting update
+            Writer.Write(input1.ItemID);
+            Writer.Write(input1.Count);
+            Writer.Write(input2.ItemID);
+            Writer.Write(input2.Count);
+            Writer.Write(output.ItemID);
+            Writer.Write(output.Count);
+            Writer.Flush();
+        }
+    }
+    public void AddItem(string itemId, int amount)
     {
         // 1. Try to stack onto existing items of the same ID (limit 99)
         for (int i = 0; i < Inventory.Length; i++)
@@ -258,7 +413,7 @@ public class ServerPlayer
         {
             for (int i = 0; i < Inventory.Length; i++)
             {
-                if (Inventory[i].ItemID == (byte)' ' || Inventory[i].Count <= 0)
+                if (Inventory[i].ItemID == "none" || Inventory[i].Count <= 0)
                 {
                     Inventory[i].ItemID = itemId;
                     Inventory[i].Count = Math.Min(amount, 99);
@@ -270,7 +425,40 @@ public class ServerPlayer
         SendFullInventory();
     }
 
-    private void BroadcastMove(string name, float x, float y, float rot, byte heldItemId, byte offHandId, bool blocking, int hp, int maxHp)
+    private int FindItemInInventory(string itemId)
+    {
+        for (int i = 0; i < Inventory.Length; i++)
+        {
+            if (Inventory[i].ItemID == itemId && Inventory[i].Count > 0) return i;
+        }
+        return -1;
+    }
+
+    private ServerItemStack GetStack(int index) {
+        if (index >= 0 && index < 25) return Inventory[index];
+        if (index == 100) return CraftingSlot1;
+        if (index == 101) return CraftingSlot2;
+        return new ServerItemStack("none", 0);
+    }
+
+    private void SetStack(int index, ServerItemStack stack) {
+        if (index >= 0 && index < 25) Inventory[index] = stack;
+        else if (index == 100) CraftingSlot1 = stack;
+        else if (index == 101) CraftingSlot2 = stack;
+    }
+
+    private ServerItemStack GetCraftingPreview()
+    {
+        if (ItemStats.Recipes.TryGetValue((CraftingSlot1.ItemID, CraftingSlot2.ItemID), out string? outputId) ||
+            ItemStats.Recipes.TryGetValue((CraftingSlot2.ItemID, CraftingSlot1.ItemID), out outputId))
+        {
+            return new ServerItemStack(outputId!, 1);
+        }
+        return new ServerItemStack("none", 0);
+    }
+
+
+    private void BroadcastMove(string name, float x, float y, float rot, string heldItemId, string offHandId, bool blocking, int hp, int maxHp)
     {
         List<ServerPlayer> playersToNotify;
         lock (ServerProgram.ConnectedPlayers)
@@ -349,6 +537,11 @@ public class ServerPlayer
         Health -= amount;
         if (Health < 0) Health = 0;
         SyncHealth();
+    }
+
+    public void ApplyKnockback(Vector2 force)
+    {
+        Velocity += force * 15f; // Multiplier to turn 'distance' into 'velocity'
     }
 
     public void SyncHealth() 

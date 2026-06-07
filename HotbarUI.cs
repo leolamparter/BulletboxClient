@@ -71,14 +71,14 @@ public class HotbarUI {
     }
 
     public static void RenderTooltip() {
-        if (HoveredStack == null || HoveredStack.Value.ItemID == ' ' || HoveredStack.Value.ItemID == '\0') return;
+        if (HoveredStack == null || HoveredStack.Value.ItemID == "none" || string.IsNullOrEmpty(HoveredStack.Value.ItemID)) return;
         
         ItemStack stack = HoveredStack.Value;
         WeaponStats? stats = null;
         WeaponStats.Library.TryGetValue(stack.ItemID, out stats);
 
         ItemStats.Library.TryGetValue(stack.ItemID, out var item);
-        string name = item?.Name ?? ((char)stack.ItemID).ToString();
+        string name = item?.Name ?? stack.ItemID;
         List<string> infoLines = new List<string>();
 
         if (stats != null) {
@@ -112,20 +112,14 @@ public class HotbarUI {
     }
 
     public static void DrawItem(ItemStack stack, Rectangle rect) {
-        if (((char)stack.ItemID) != ' ' && ((char)stack.ItemID) != '\0') {
-            char idChar = (char)stack.ItemID;
-            string id = idChar.ToString();
-            
+        if (stack.ItemID != "none" && !string.IsNullOrEmpty(stack.ItemID)) {
             ItemStats.Library.TryGetValue(stack.ItemID, out var item);
             string textureKey = item?.TextureKey ?? "";
             
             Texture2D itemTex = string.IsNullOrEmpty(textureKey) ? new Texture2D() : AssetManager.GetTexture(textureKey);
 
             if (itemTex.Id != 0) {
-                // Only rotate items that have combat stats (weapons)
-                WeaponStats? stats = null;
-                WeaponStats.Library.TryGetValue(stack.ItemID, out stats);
-                float rotation = (stats != null) ? -45f : 0f;
+                float rotation = 0f;
 
                 // Draw centered in slot with small padding
                 float scale = (rect.Width - 10) / itemTex.Width;
@@ -135,8 +129,8 @@ public class HotbarUI {
                 Vector2 origin = new Vector2((itemTex.Width * scale) / 2, (itemTex.Height * scale) / 2);
                 Raylib.DrawTexturePro(itemTex, new Rectangle(0, 0, itemTex.Width, itemTex.Height), dest, origin, rotation, Color.White);
             } else {
-                int tw = Raylib.MeasureText(id, 30);
-                Raylib.DrawText(id, (int)(rect.X + rect.Width / 2 - tw / 2), (int)(rect.Y + rect.Height / 2 - 15), 30, Color.White);
+                int tw = Raylib.MeasureText(stack.ItemID, 30);
+                Raylib.DrawText(stack.ItemID, (int)(rect.X + rect.Width / 2 - tw / 2), (int)(rect.Y + rect.Height / 2 - 15), 30, Color.White);
             }
 
             if (stack.Count > 1) {

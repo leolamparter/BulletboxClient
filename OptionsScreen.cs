@@ -11,9 +11,14 @@ public class OptionsScreen
     private UIButton _backButton = new UIButton("BACK", Vector2.Zero, 30, true);
     private UIButton _reloadButton = new UIButton("RELOAD TEXTURES", Vector2.Zero, 30);
 
-    public void Update()
+    public void Update(bool windowResized)
     {
-        if (Program.cameFrom == GameState.HOME) HomeScreen.background.Update();
+        if (Program.cameFrom == GameState.HOME) HomeScreen.background.Update(windowResized);
+        else if (Program.cameFrom == GameState.PLAYING && Program.PlayingState != null)
+        {
+            // When in options from playing, the game world should still update, especially for resizing.
+            Program.PlayingState.Update(Raylib.GetFrameTime(), windowResized);
+        }
 
         float centerX = Raylib.GetScreenWidth() / 2f;
         float centerY = Raylib.GetScreenHeight() / 2f;

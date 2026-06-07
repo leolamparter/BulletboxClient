@@ -19,6 +19,7 @@ public class Structure
     public float RaidTimer { get; set; } = 9999f;
     public float RaidBossHealth { get; set; } = 0f;
     public bool HasPlayedCountdown { get; set; } = false;
+    public ServerItemStack[]? ChestInventory { get; set; } = null;
 
     public Structure(Vector2 position, StructureType type, int chunkX, int chunkY, string textureName)
     {

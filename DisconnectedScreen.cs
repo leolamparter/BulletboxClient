@@ -10,9 +10,9 @@ public class DisconnectedScreen
         backButton = new UIButton("BACK", Vector2.Zero, 30, true);
     }
 
-    public void Update()
+    public void Update(bool windowResized)
     {
-        HomeScreen.background.Update();
+        HomeScreen.background.Update(windowResized);
         float centerX = Raylib.GetScreenWidth() / 2f;
         float centerY = Raylib.GetScreenHeight() / 2f;
 

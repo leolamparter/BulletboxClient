@@ -178,9 +178,9 @@ public class WorldBackground
         _env.SunIntensity = 0.4f;
     }
 
-    public void Update()
+    public void Update(bool windowResized)
     {
-        float dt = Raylib.GetFrameTime();
+        float dt = Raylib.GetFrameTime(); // dt is still needed for scrolling and environment update
         
         // Scrolling at a consistent speed
         _scrollX += dt * 48f; 
@@ -189,7 +189,7 @@ public class WorldBackground
         // Slow down the day-night cycle for a calmer menu experience
         _env.Update(dt * 0.25f, false);
         
-        if (Raylib.IsWindowResized())
+        if (windowResized)
         {
             if (_sceneTarget.Id != 0)
             {
@@ -198,13 +198,15 @@ public class WorldBackground
             }
             _sceneTarget = Raylib.LoadRenderTexture(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
             _lightingTarget = Raylib.LoadRenderTexture(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+                _chunkCache.Clear();
+                _biomeCache.Clear();
         }
     }
 
     public void Draw()
     {
-        int sw = Raylib.GetScreenWidth();
-        int sh = Raylib.GetScreenHeight();
+            int sw = _sceneTarget.Texture.Width;
+            int sh = _sceneTarget.Texture.Height;
 
         Raylib.BeginTextureMode(_sceneTarget);
         Raylib.ClearBackground(Color.Black);
@@ -261,13 +263,13 @@ public class WorldBackground
         
         Raylib.BeginTextureMode(_lightingTarget);
             Raylib.BeginShaderMode(_lightShader);
-                Raylib.DrawTextureRec(_sceneTarget.Texture, new Rectangle(0, 0, sw, -sh), Vector2.Zero, Color.White);
+                    Raylib.DrawTextureRec(_sceneTarget.Texture, new Rectangle(0, 0, _sceneTarget.Texture.Width, -_sceneTarget.Texture.Height), Vector2.Zero, Color.White);
             Raylib.EndShaderMode();
         Raylib.EndTextureMode();
 
         Raylib.BeginShaderMode(_postShader);
             ApplyPostProcessUniforms();
-            Raylib.DrawTextureRec(_lightingTarget.Texture, new Rectangle(0, 0, sw, -sh), Vector2.Zero, Color.White);
+                Raylib.DrawTextureRec(_lightingTarget.Texture, new Rectangle(0, 0, _lightingTarget.Texture.Width, -_lightingTarget.Texture.Height), Vector2.Zero, Color.White);
         Raylib.EndShaderMode();
 
         DrawAtmosphericGradient(sw, sh);

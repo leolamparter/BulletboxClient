@@ -65,6 +65,17 @@ public class ServerBomb
     public ServerBomb(Vector2 pos, Vector2 vel, string owner) { Position = pos; Velocity = vel; Timer = 1.0f; OwnerName = owner; Exploded = false; TargetPlayer = ""; }
 }
 
+public class ServerGust // NEW
+{
+    public Vector2 Position;
+    public Vector2 Velocity;
+    public float LifeTime;
+    public string OwnerName;
+    public float Damage;
+    public float KnockbackForce;
+    public ServerGust(Vector2 pos, Vector2 vel, string owner, float damage, float knockback) { Position = pos; Velocity = vel; LifeTime = 2.0f; OwnerName = owner; Damage = damage; KnockbackForce = knockback; } // 2 seconds life
+}
+
 public class RaiderBot
 {
     public string Name;
@@ -75,7 +86,7 @@ public class RaiderBot
     public int MaxHealth = 100;
     public float Rotation;
     public float AttackTimer;
-    public byte HeldItemID = (byte)'S';
+    public string HeldItemID = "iron_sword";
     public float AttackCooldown = 0.425f;
     public float FleeTimer = 0f;
     public Vector2? WanderTarget = null;
@@ -100,6 +111,7 @@ public class ServerWorld
     public bool RaidActive = false;
     public List<RaiderBot> Raiders = new();
     public List<ServerBomb> ActiveBombs = new();
+    public List<ServerGust> ActiveGusts = new(); // NEW
     public Vector2? ActiveRaidOutpostPosition = null; // NEW FIELD HERE
 
     // Storage for world structures like Raid Outposts

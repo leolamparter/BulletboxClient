@@ -13,7 +13,7 @@ public class PauseMenu
         buttons.Add(new UIButton("DISCONNECT", Vector2.Zero, 30));
     }
 
-    public void Update()
+    public void Update(bool windowResized)
     {
         float centerX = Raylib.GetScreenWidth() / 2;
         float centerY = Raylib.GetScreenHeight() / 2;

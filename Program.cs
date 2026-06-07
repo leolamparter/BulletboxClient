@@ -1,4 +1,4 @@
-﻿﻿using Raylib_cs;
+﻿﻿﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
 using System.IO;
@@ -17,11 +17,17 @@ class Program
     public static Playing? PlayingState; // Made nullable to resolve CS8618
     public static SplashScreen? splashScreen;
     
+    public static bool IsEnding = false;
     // NEW: Pause State
     public static string LastIP = "127.0.0.1";
     public static int LastPort = 32308;
     public static bool IsPaused = false;
     private static float _lastAttempt = 0;
+
+    private static Random _musicRng = new Random();
+    // Global Music Management
+    private static string _currentMusicKey = "";
+    private static int _currentCalmTrack = _musicRng.Next(1, 7); // Initialize with a random track
 
     public static void TriggerSplash(GameState next, Action? loadingAction = null)
     {
@@ -107,6 +113,11 @@ class Program
         DisconnectedScreen disconnectedScreen = new DisconnectedScreen();
         DeathScreen deathScreen = new DeathScreen();
 
+        // Load Background Soundtracks early for UI support
+        for (int i = 1; i <= 6; i++) AudioManager.LoadSound($"calm_{i}", $"resources/soundtracks/calm/{i}.mp3");
+        AudioManager.LoadSound("intense_1", "resources/soundtracks/intense/1.mp3");
+        AudioManager.LoadSound("end_animation", "resources/soundtracks/end_animation.mp3");
+
         // Redirect to Login if the user hasn't logged in before, otherwise go to Home.
         TriggerSplash(CurrentUser.HasLoggedIn ? GameState.HOME : GameState.LOGIN);
 
@@ -122,6 +133,7 @@ class Program
         });
 
 
+        bool windowResizedThisFrame = false;
         while (!Raylib.WindowShouldClose()) // Main Game Loop
         {
             // Call this inside your main update/tick loop (e.g., in Raylib)
@@ -132,27 +144,28 @@ class Program
                 if (CurrentState == GameState.PLAYING) 
                 {
                     IsPaused = !IsPaused;
-                    if (IsPaused) AudioManager.StopAll();
                 }
             }
+
+            windowResizedThisFrame = Raylib.IsWindowResized();
 
             // --- UPDATE ---
             switch (CurrentState)
             {
                 case GameState.SPLASH:
-                    splashScreen.Update();
+                    splashScreen.Update(windowResizedThisFrame);
                     break;
                 case GameState.HOME:
-                    homeScreen.Update();
+                    homeScreen.Update(windowResizedThisFrame);
                     break;
                 case GameState.SINGLEPLAYER_CONNECTING:
-                    if (!ServerProgram.IsRunning) _ = ServerProgram.RunServerAsync();
+                    if (!ServerProgram.IsRunning) _ = ServerProgram.RunServerAsync(); // This should probably be awaitaed or handled differently for proper server startup
+                    homeScreen.Update(windowResizedThisFrame); // Update background
 
                     if (PlayingState == null)
                     {
                         PlayingState = new Playing(string.IsNullOrEmpty(CurrentUser.Username) ? "Player" : CurrentUser.Username);
                     }
-
                     if (!Net.IsConnected())
                     {
                         // Throttle connection attempts while waiting for the integrated server to start
@@ -168,7 +181,7 @@ class Program
                     }
                     break;
                 case GameState.LOGIN:
-                    loginScreen.Update();
+                    loginScreen.Update(windowResizedThisFrame);
                     if (CurrentUser.HasLoggedIn) CurrentState = GameState.HOME;
                     break;
                 case GameState.PLAYING:
@@ -177,19 +190,16 @@ class Program
                     {
                         PlayingState = new Playing(string.IsNullOrEmpty(CurrentUser.Username) ? "Player" : CurrentUser.Username);
                     }
-
                     // Only initiate a connection if we aren't already connected (e.g. coming from Home -> Multiplayer)
                     if (!Net.IsConnected())
                     {
                         DisconnectAndLeave(GameState.DISCONNECTED);
                         break;
                     }
-
                     // Always update playing state so networking/health packets process
-                    PlayingState.Update();
+                    PlayingState.Update(Raylib.GetFrameTime(), windowResizedThisFrame);
 
-                    if (IsPaused) pauseMenu.Update();
-
+                    if (IsPaused) pauseMenu.Update(windowResizedThisFrame);
                     // Death Check: Kick on death
                     if (PlayingState != null && PlayingState.CurrentHealth <= 0) 
                     {
@@ -199,10 +209,10 @@ class Program
                     }
                     break;
                 case GameState.FRIENDS:
-                    friendsScreen.Update();
+                    friendsScreen.Update(windowResizedThisFrame);
                     break;
                 case GameState.OPTIONS:
-                    optionsScreen.Update();
+                    optionsScreen.Update(windowResizedThisFrame);
                     // Save settings if we just moved back to the home or playing screen
                     if (CurrentState != GameState.OPTIONS)
                     {
@@ -210,12 +220,14 @@ class Program
                     }
                     break;
                 case GameState.DISCONNECTED:
-                    disconnectedScreen.Update();
+                    disconnectedScreen.Update(windowResizedThisFrame);
                     break;
                 case GameState.DEATH:
-                    deathScreen.Update();
+                    deathScreen.Update(windowResizedThisFrame);
                     break;
             }
+
+            UpdateGlobalMusic();
 
             // --- DRAW ---
             Raylib.BeginDrawing();
@@ -227,17 +239,17 @@ class Program
                     splashScreen.Draw();
                     break;
                 case GameState.HOME:
-                    homeScreen.Draw();
+                    homeScreen.Draw(); 
                     break;
                 case GameState.SINGLEPLAYER_CONNECTING:
-                    HomeScreen.background.Update();
+                    HomeScreen.background.Update(windowResizedThisFrame);
                     HomeScreen.background.Draw();
                     string connText = "Connecting to integrated server...";
                     int connWidth = Raylib.MeasureText(connText, 30);
                     Raylib.DrawText(connText, Raylib.GetScreenWidth() / 2 - connWidth / 2, Raylib.GetScreenHeight() / 2, 30, Color.White);
                     break;
                 case GameState.LOGIN:
-                    HomeScreen.background.Update();
+                    HomeScreen.background.Update(windowResizedThisFrame);
                     HomeScreen.background.Draw();
                     loginScreen.Draw();
                     break;
@@ -277,6 +289,64 @@ class Program
         Raylib.CloseAudioDevice();
         client.Dispose();
         Raylib.CloseWindow();
+    }
+
+    private static void UpdateGlobalMusic()
+    {
+        bool isIntense = false;
+        bool isSilent = false;
+        string targetMusic = "";
+        float volume = 0.20f;
+
+        // 1. Select Target Track & State
+        if (IsEnding)
+        {
+            targetMusic = "end_animation";
+            volume = 0.5f; // Ending music should be clear and dramatic
+        }
+        else if (CurrentState == GameState.PLAYING && PlayingState != null)
+        {
+            byte biome = PlayingState.CurrentBiome;
+            isIntense = (biome == 8 || biome == 9); // Ashen Wastelands or Lava Pools
+            isSilent = PlayingState.RaidActive || PlayingState.IsBossActive();
+        }
+
+        // Determine which soundtrack to play if not in the end sequence
+        if (string.IsNullOrEmpty(targetMusic))
+        {
+            if (isIntense)
+            {
+                targetMusic = "intense_1";
+                volume = 0.25f;
+            }
+            else if (!isSilent)
+            {
+                targetMusic = $"calm_{_currentCalmTrack}";
+                volume = 0.20f;
+
+                // Auto-cycle to a new random track if the current one finished
+                if (_currentMusicKey == targetMusic && !AudioManager.IsSoundPlaying(targetMusic))
+                {
+                    _currentCalmTrack = _musicRng.Next(1, 7);
+                    targetMusic = $"calm_{_currentCalmTrack}";
+                }
+            }
+        }
+
+        // 3. Handle Track Transitions
+        if (_currentMusicKey != targetMusic)
+        {
+            if (!string.IsNullOrEmpty(_currentMusicKey)) AudioManager.StopSound(_currentMusicKey);
+            _currentMusicKey = targetMusic;
+            if (!string.IsNullOrEmpty(_currentMusicKey)) AudioManager.PlaySound(_currentMusicKey);
+        }
+
+        // 4. Update Playback
+        if (!string.IsNullOrEmpty(_currentMusicKey))
+        {
+            AudioManager.SetVolume(_currentMusicKey, volume);
+            if (!AudioManager.IsSoundPlaying(_currentMusicKey)) AudioManager.PlaySound(_currentMusicKey);
+        }
     }
 
     public static int GetRequiredChunkRadius()

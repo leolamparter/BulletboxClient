@@ -94,8 +94,8 @@ public class Connection
                     float x = _reader.ReadSingle();
                     float y = _reader.ReadSingle();
                     float rot = _reader.ReadSingle();
-                    byte heldId = _reader.ReadByte();
-                    byte offHandId = _reader.ReadByte();
+                    string heldId = _reader.ReadString();
+                    string offHandId = _reader.ReadString();
                     bool isBlocking = _reader.ReadBoolean();
                     int hp = _reader.ReadInt32();
                     int maxHp = _reader.ReadInt32();
@@ -135,7 +135,7 @@ public class Connection
                 {
                     for (int i = 0; i < 25; i++)
                     {
-                        byte id = _reader.ReadByte(); // Read 1 byte to match the server
+                        string id = _reader.ReadString();
                         int count = _reader.ReadInt32();
                         if (Program.PlayingState != null)
                             Program.PlayingState.PlayerInventory.Slots[i] = new ItemStack(id, count);
@@ -241,6 +241,42 @@ public class Connection
                         Program.PlayingState.SpawnVisualBomb(new Vector2(startX, startY), new Vector2(velX, velY));
                     }
                 }
+                else if (packetId == 17) // Incoming Gust (NEW)
+                {
+                    float startX = _reader.ReadSingle();
+                    float startY = _reader.ReadSingle();
+                    float velX = _reader.ReadSingle();
+                    float velY = _reader.ReadSingle();
+
+                    if (Program.PlayingState != null) {
+                        Program.PlayingState.SpawnVisualGust(new Vector2(startX, startY), new Vector2(velX, velY));
+                    }
+                }
+                else if (packetId == 18) // Crafting Update
+                {
+                    string input1Id = _reader.ReadString();
+                    int input1Count = _reader.ReadInt32();
+                    string input2Id = _reader.ReadString();
+                    int input2Count = _reader.ReadInt32();
+                    string outputId = _reader.ReadString();
+                    int outputCount = _reader.ReadInt32();
+
+                    if (Program.PlayingState != null) {
+                        Program.PlayingState.InvMenu.UpdateCraftingSlots(
+                            new ItemStack(input1Id, input1Count), new ItemStack(input2Id, input2Count), new ItemStack(outputId, outputCount));
+                    }
+                }
+                else if (packetId == 19) // Chest Data Sync
+                {
+                    ItemStack[] chestSlots = new ItemStack[18];
+                    for (int i = 0; i < 18; i++) {
+                        string id = _reader.ReadString();
+                        int count = _reader.ReadInt32();
+                        chestSlots[i] = new ItemStack(id, count);
+                    }
+                    if (Program.PlayingState != null) 
+                        Program.PlayingState.InvMenu.OpenChestUI(chestSlots);
+                }
             }
         }
         catch (EndOfStreamException)
@@ -299,13 +335,14 @@ public class Connection
         catch { _isConnected = false; }
     }
 
-    public void SendMoveItem(byte from, byte to)
+    public void SendMoveItem(byte from, byte to, int count)
     {
         if (!_isConnected || _writer == null) return;
         try {
             _writer.Write((byte)3);
             _writer.Write(from);
             _writer.Write(to);
+            _writer.Write(count);
             _writer.Flush();
         } catch { _isConnected = false; }
     }
@@ -354,6 +391,45 @@ public class Connection
             _writer.Flush();
         }
         catch { _isConnected = false; }
+    }
+
+    public void SendCraftRequest(string input1Id, int input1Count, string input2Id, int input2Count)
+    {
+        if (!_isConnected || _writer == null) return;
+        try
+        {
+            _writer.Write((byte)18); // Packet ID 18 for crafting request
+            _writer.Write(input1Id);
+            _writer.Write(input1Count);
+            _writer.Write(input2Id);
+            _writer.Write(input2Count);
+            _writer.Flush();
+        }
+        catch { _isConnected = false; }
+    }
+
+    public void SendOpenChest(int chunkX, int chunkY)
+    {
+        if (!_isConnected || _writer == null) return;
+        try {
+            _writer.Write((byte)19);
+            _writer.Write(chunkX);
+            _writer.Write(chunkY);
+            _writer.Flush();
+        } catch { _isConnected = false; }
+    }
+
+    public void SendChestMove(byte chestSlot, byte invSlot, bool toChest, int count)
+    {
+        if (!_isConnected || _writer == null) return;
+        try {
+            _writer.Write((byte)20);
+            _writer.Write(chestSlot);
+            _writer.Write(invSlot);
+            _writer.Write(toChest);
+            _writer.Write(count);
+            _writer.Flush();
+        } catch { _isConnected = false; }
     }
 
     public bool IsConnected() => _isConnected;

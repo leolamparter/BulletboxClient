@@ -26,9 +26,9 @@ public class HomeScreen
         buttons.Add(new UIButton("QUIT GAME", Vector2.Zero, 40));
     }
 
-    public void Update()
+    public void Update(bool windowResized)
     {
-        background.Update();
+        background.Update(windowResized);
         for (int i = 0; i < buttons.Count; i++)
         {
             if (buttons[i].IsClicked())

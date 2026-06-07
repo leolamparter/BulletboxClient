@@ -21,9 +21,9 @@ public class FriendsScreen
         _retryBtn = new UIButton("RETRY SCAN", Vector2.Zero, 20);
     }
 
-    public void Update()
+    public void Update(bool windowResized)
     {
-        HomeScreen.background.Update();
+        HomeScreen.background.Update(windowResized);
         LanDiscovery.Update();
 
         float centerX = Raylib.GetScreenWidth() / 2f;

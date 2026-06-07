@@ -12,10 +12,10 @@ public class Player
     public int MaxHealth = 100;
     public bool FacingRight = true;
     public float Rotation = 0f;
-    public byte HeldItemID = 0;
+    public string HeldItemID = "none";
     public float AttackAnimProgress = 0f;
     public bool IsBlocking = false;
-    public byte OffHandItemID = 0;
+    public string OffHandItemID = "none";
 
     private float _rotation = 0f;
     private const float _rotationSpeed = 150f; // Degrees per second
@@ -100,31 +100,32 @@ public class Player
         Vector2 destOrigin = new Vector2(48, 48); // Center the 96x96 texture on the player center
 
         // 1. Determine which weapon texture to use
-        string weaponKey = HeldItemID == (byte)'K' ? "kanabo" : (HeldItemID == (byte)'P' ? "spear" : (HeldItemID == (byte)'S' ? "sword" : ""));
+        ItemStats.Library.TryGetValue(HeldItemID, out var item);
+        string weaponKey = item?.TextureKey ?? "";
         Texture2D weaponTex = !string.IsNullOrEmpty(weaponKey) ? AssetManager.GetTexture(weaponKey) : new Texture2D();
 
         void DrawWeapon()
         {   
             if (weaponTex.Id == 0) return;
             
-            float scale = 1.0f; // 2x larger than previous 0.5f
+            float scale = 4.0f; 
             float currentHoldRadius = 24f; // Base distance from center to "hand"
-            float visualRotation = Rotation;
+            float visualRotation = Rotation + 45f; // Apply 45-degree clockwise rotation
 
             // 2. Apply Animation Offsets
             if (AttackAnimProgress > 0)
             {
                 float t = 1.0f - AttackAnimProgress; // 0.0 to 1.0 progress
                 
-                if (HeldItemID == (byte)'P') // Spear: Stab (Linear thrust)
+                if (HeldItemID.Contains("spear")) // Any tier of Spear: Stab (Linear thrust)
                 {
                     currentHoldRadius += MathF.Sin(t * MathF.PI) * 45f;
                 }
-                else if (HeldItemID == (byte)'S' || HeldItemID == (byte)'K') // Sword/Kanabo: Swing (Arc)
+                else if (HeldItemID.Contains("sword") || HeldItemID.Contains("kanabo") || HeldItemID.Contains("axe") || HeldItemID.Contains("scythe")) // Swing (Arc)
                 {
                     visualRotation += (t * 120f) - 60f;
                 }
-                else if (HeldItemID == (byte)'B') // Bow: Pull back
+                else if (HeldItemID.Contains("bow")) // Any Bow: Pull back
                 {
                     currentHoldRadius -= MathF.Sin(t * MathF.PI) * 15f;
                 }
@@ -137,7 +138,7 @@ public class Player
                 center.Y + MathF.Sin(rad) * currentHoldRadius
             );
 
-            if (HeldItemID == (byte)'B') // Bow needs to be rotated 90 degrees counter-clockwise
+            if (HeldItemID.Contains("bow")) // Bow needs to be rotated 90 degrees counter-clockwise
             {
                 visualRotation -= 90f;
             }
@@ -153,7 +154,7 @@ public class Player
 
         void DrawOffhand()
         {
-            if (OffHandItemID == 0 || OffHandItemID == (byte)' ' || OffHandItemID == (byte)'\0') return;
+            if (OffHandItemID == "none" || string.IsNullOrEmpty(OffHandItemID)) return;
             
             ItemStats.Library.TryGetValue(OffHandItemID, out var item);
             string textureKey = item?.TextureKey ?? "";
@@ -161,7 +162,7 @@ public class Player
             Texture2D tex = AssetManager.GetTexture(textureKey);
             if (tex.Id == 0) return;
 
-            bool isShield = OffHandItemID == (byte)'H';
+            bool isShield = OffHandItemID == "shield";
             float scale = (isShield && IsBlocking) ? 1.0f : 0.65f;
             float radius = (isShield && IsBlocking) ? 30f : 22f;
             
@@ -174,20 +175,21 @@ public class Player
             Rectangle src = new Rectangle(0, 0, tex.Width, tex.Height);
             Rectangle dest = new Rectangle(shieldPos.X, shieldPos.Y, tex.Width * scale, tex.Height * scale);
             Vector2 origin = new Vector2((tex.Width * scale) / 2, (tex.Height * scale) / 2); // Center pivot
-            Raylib.DrawTexturePro(tex, src, dest, origin, Rotation, Color.White);
+            Raylib.DrawTexturePro(tex, src, dest, origin, Rotation + 45f, Color.White); // Apply 45-degree clockwise rotation
         }
 
         // 3. Execution Pass - Draw body first, then items on top
         bool isRaider = Name.StartsWith("Raider");
         bool isBrimstalker = Name == "Brimstalker";
         bool isFlicker = Name.StartsWith("Flicker");
+        bool isVortex = Name.StartsWith("Vortex");
 
         float currentScale = 1.0f;
         if (isFlicker) currentScale = 0.5f; // Flicker is 50% smaller
 
-        if (isRaider || isBrimstalker || isFlicker)
+        if (isRaider || isBrimstalker || isFlicker || isVortex)
         {
-            string texPrefix = isFlicker ? "flicker" : (isRaider ? "raidshroomer" : "brimstalker");
+            string texPrefix = isFlicker ? "flicker" : (isRaider ? "raidshroomer" : (isBrimstalker ? "brimstalker" : "vortex"));
             string mobTexKey = $"{texPrefix}_idle"; // Default to idle
             
             if (Health < MaxHealth * 0.3f) mobTexKey = $"{texPrefix}_afraid";
@@ -205,7 +207,7 @@ public class Player
             }
             else
             {
-                Console.WriteLine($"[DEBUG] Failed to load texture for entity '{Name}'. Requested key: '{mobTexKey}'. Please verify the file exists and is correctly named in 'resources/textures/entity/flicker/'.");
+                Console.WriteLine($"[DEBUG] Failed to load texture for entity '{Name}'. Requested key: '{mobTexKey}'. Please verify the file exists and is correctly named in 'resources/textures/entity/{texPrefix}/'.");
             }
         }
         else
@@ -216,7 +218,7 @@ public class Player
 
         // Always draw items in front of the player body
         // Brimstalker and Flicker have no weapons or offhand items drawn
-        if (Name != "Brimstalker" && !Name.StartsWith("Flicker"))
+        if (!isBrimstalker && !isFlicker && !isVortex)
         {
             DrawWeapon();
             DrawOffhand();
