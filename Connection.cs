@@ -17,6 +17,7 @@ public class Connection
     public Dictionary<(int, int), Structure> Structures = new();
     public readonly object StructuresLock = new();
 
+    public Dimension CurrentDimension = Dimension.Overworld;
         public void SendChunkRequest(int chunkX, int chunkY)
         {
             if (!_isConnected || _writer == null) return;
@@ -81,6 +82,16 @@ public class Connection
                     if (success) 
                     {
                         Console.WriteLine("Server confirmed login. World synchronization active.");
+                        float startX = _reader.ReadSingle();
+                        float startY = _reader.ReadSingle();
+                        byte startDim = _reader.ReadByte();
+
+                        CurrentDimension = (Dimension)startDim;
+                        if (Program.PlayingState != null)
+                        {
+                            Program.PlayingState.LocalPlayer.Position = new Vector2(startX, startY);
+                            Console.WriteLine($"[Network] Teleported to saved position: {startX}, {startY}");
+                        }
                     }
                     else 
                     {
@@ -277,6 +288,27 @@ public class Connection
                     if (Program.PlayingState != null) 
                         Program.PlayingState.InvMenu.OpenChestUI(chestSlots);
                 }
+                else if (packetId == 21) // Dimension Update
+                {
+                    byte dim = _reader.ReadByte();
+                    if (CurrentDimension == Dimension.TheEnd && (Dimension)dim == Dimension.Overworld) Program.IsEnding = false; // Reset cinematic state if returning from The End
+                    CurrentDimension = (Dimension)dim;
+                    lock (ChunkBiomesLock)
+                    {
+                        ChunkBiomes.Clear();
+                        ChunkFeatures.Clear();
+                    }
+                    lock (StructuresLock)
+                    {
+                        Structures.Clear();
+                    }
+                    if (Program.PlayingState != null)
+                    {
+                        lock (Program.PlayingState.OthersLock) { Program.PlayingState.Others.Clear(); }
+                        Program.PlayingState.RaidActive = false;
+                        Program.PlayingState.TriggerCacheClear();
+                    }
+                }
             }
         }
         catch (EndOfStreamException)
@@ -437,6 +469,7 @@ public class Connection
     public void Disconnect()
     {
         _isConnected = false;
+        CurrentDimension = Dimension.Overworld;
         
         try
         {

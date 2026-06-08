@@ -21,6 +21,7 @@ public class ServerPlayer
     public Vector2 Position = Vector2.Zero; // Server's authoritative position
     public float Rotation = 0f;
     public bool IsBlocking = false;
+    public Dimension CurrentDimension = Dimension.Overworld;
     public int ViewRadius = 40;
 
     private TcpClient _client;
@@ -68,15 +69,59 @@ public class ServerPlayer
                     string clientVer = _reader.ReadString();
                     _reader.ReadString(); // password
                     
-                    Position = new Vector2(400, 300); // Set initial position
+                    // Try to find this specific player in the loaded save dictionary
+                    if (ServerProgram.LoadedPlayers.TryGetValue(Username, out var savedData))
+                    {
+                        Console.WriteLine($"[Server] Found saved data for {Username}. Applying...");
+                        Health = savedData.Health;
+                        MaxHealth = savedData.MaxHealth;
+                        Hunger = savedData.Hunger;
+                        Position = savedData.Position;
+                        Rotation = savedData.Rotation;
+                        IsBlocking = savedData.IsBlocking;
+                        CurrentDimension = savedData.CurrentDimension;
+                        SelectedSlot = savedData.SelectedSlot;
+                        AshenTime = savedData.AshenTime;
+                        BrimstalkerCooldown = savedData.BrimstalkerCooldown;
+                        Inventory = savedData.Inventory;
+                        CraftingSlot1 = savedData.CraftingSlot1;
+                        CraftingSlot2 = savedData.CraftingSlot2;
+
+                        // If the player is loading in with no health, treat it as a respawn
+                        if (Health <= 0)
+                        {
+                            Console.WriteLine($"[Server] {Username} joined while dead. Teleporting to Overworld spawn.");
+                            Health = MaxHealth;
+                            Hunger = 100;
+                            Position = Vector2.Zero;
+                            CurrentDimension = Dimension.Overworld;
+
+                            // Clear inventory on death reset
+                            for (int i = 0; i < 25; i++) Inventory[i] = new ServerItemStack("none", 0);
+                            Inventory[0] = new ServerItemStack("iron_sword", 1); // Always give the starter sword
+                            
+                            // Clear crafting slots to prevent item duplication
+                            CraftingSlot1 = new ServerItemStack("none", 0);
+                            CraftingSlot2 = new ServerItemStack("none", 0);
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[Server] No saved data found for {Username}. Starting fresh.");
+                        Position = new Vector2(400, 300); // Set initial position
+                        Inventory[0] = new ServerItemStack("iron_sword", 1); // Starting weapon
+                    }
+
+                    // Authoritative Sync: Ensure the world map is updated with the position (loaded or default)
                     world.UpdatePosition(Username, Position.X, Position.Y);
-                    
-                    Inventory[0] = new ServerItemStack("iron_sword", 1); // Starting weapon
 
                     lock (WriterLock)
                     {
                         Writer.Write((byte)0);
                         Writer.Write(true);
+                        Writer.Write(Position.X);
+                        Writer.Write(Position.Y);
+                        Writer.Write((byte)CurrentDimension);
                         SendFullInventory();
                         SyncHealth(); // Send initial health state immediately upon login
                     }
@@ -89,7 +134,7 @@ public class ServerPlayer
                     Position = new Vector2(x, y); // Update server's authoritative position
                     Rotation = _reader.ReadSingle();
                     world.UpdatePosition(Username, Position.X, Position.Y);
-                    BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking, Health, MaxHealth);
+                    BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking, Health, MaxHealth, CurrentDimension);
                 }
                 else if (packetId == 2) // Slot Selection
                 {
@@ -139,7 +184,7 @@ public class ServerPlayer
                 {
                     int chunkX = _reader.ReadInt32();
                     int chunkY = _reader.ReadInt32();
-                    var chunk = world.GetOrGenerateChunk(chunkX, chunkY);
+                    var chunk = world.GetOrGenerateChunk(chunkX, chunkY, CurrentDimension);
                     lock (WriterLock)
                     {
                         Writer.Write((byte)10); 
@@ -208,7 +253,7 @@ public class ServerPlayer
                             }
                         } else {
                             var bot = world.Raiders.Find(b => b.Name == victimName);
-                            if (bot != null && Vector2.Distance(this.Position, bot.Position) <= range) {
+                            if (bot != null && bot.Dimension == CurrentDimension && Vector2.Distance(this.Position, bot.Position) <= range) {
                                 _lastAttackTime = DateTime.Now;
                                 _lastHitTime = DateTime.Now;
                                 bot.Health -= (int)dmg;
@@ -220,6 +265,12 @@ public class ServerPlayer
 
                                 if (bot.Health <= 0) {
                                     world.Raiders.Remove(bot);
+                                    if (bot.Name == "APEX")
+                                    {
+                                        Vector2 portalPos = Vector2.Zero;
+                                        Structure portal = new Structure(portalPos, StructureType.EndPortal, 0, 0, "");
+                                        world.Structures.TryAdd((0, 0), portal);
+                                    }
                                     // Notify all clients to remove this bot from their screens
                                     lock (ServerProgram.ConnectedPlayers) {
                                         foreach (var p in ServerProgram.ConnectedPlayers) p.SendLeaveSignal(bot.Name);
@@ -237,6 +288,15 @@ public class ServerPlayer
                 else if (packetId == 8) // Chat Message
                 {
                     string msg = _reader.ReadString();
+                    if (msg == "overworld")
+                    {
+                        CurrentDimension = Dimension.Overworld;
+                        Position = Vector2.Zero;
+                        world.UpdatePosition(Username, 0, 0);
+                        SendDimensionUpdate();
+                        BroadcastChat("SYSTEM", $"{Username} returned to the Overworld.");
+                        continue;
+                    }
                     if (msg.StartsWith("giveitem:"))
                     {
                         string[] parts = msg.Split(':');
@@ -344,6 +404,35 @@ public class ServerPlayer
                         Inventory[slot].Count--;
                         if (Inventory[slot].Count <= 0)
                         {
+                            Inventory[slot].ItemID = "none";
+                            Inventory[slot].Count = 0;
+                        }
+                    }
+                    else if (slot < 25 && Inventory[slot].ItemID == "brimstone_pearl" && Inventory[slot].Count > 0)
+                    {
+                        if (CurrentDimension == Dimension.TheEnd)
+                        {
+                            BroadcastChat("SYSTEM", "Brimstone Pearls do not work in The End.");
+                            continue; // Prevent pearl usage in The End
+                        }
+                        // Teleport to The End
+                        CurrentDimension = Dimension.TheEnd;
+                        Position = new Vector2(0, 0); // Reset position in new dimension
+                        world.UpdatePosition(Username, Position.X, Position.Y);
+                        SendDimensionUpdate();
+                        
+                        // Spawn APEX if it doesn't exist in The End (Thread-safe check)
+                        lock(world.Raiders)
+                        {
+                            if (!world.Raiders.Any(r => r.Name == "APEX" && r.Dimension == Dimension.TheEnd))
+                            {
+                                ServerProgram.SpawnAPEX(world);
+                            }
+                        }
+                        BroadcastChat("SYSTEM", $"{Username} used a Brimstone Pearl and traveled to The End.");
+                        
+                        Inventory[slot].Count--;
+                        if (Inventory[slot].Count <= 0) {
                             Inventory[slot].ItemID = "none";
                             Inventory[slot].Count = 0;
                         }
@@ -458,7 +547,7 @@ public class ServerPlayer
     }
 
 
-    private void BroadcastMove(string name, float x, float y, float rot, string heldItemId, string offHandId, bool blocking, int hp, int maxHp)
+    private void BroadcastMove(string name, float x, float y, float rot, string heldItemId, string offHandId, bool blocking, int hp, int maxHp, Dimension dimension)
     {
         List<ServerPlayer> playersToNotify;
         lock (ServerProgram.ConnectedPlayers)
@@ -470,6 +559,7 @@ public class ServerPlayer
         {
             try {
                 if (p.Username == name) continue; 
+                if (p.CurrentDimension != dimension) continue;
                 lock (p.WriterLock)
                 {
                     p.Writer.Write((byte)1);
@@ -489,7 +579,7 @@ public class ServerPlayer
         }
     }
 
-    private void BroadcastChat(string sender, string message)
+    public void BroadcastChat(string sender, string message)
     {
         List<ServerPlayer> playersToNotify;
         lock (ServerProgram.ConnectedPlayers)
@@ -519,6 +609,16 @@ public class ServerPlayer
         {
             Writer.Write((byte)9); // Packet ID 9: Player Left
             Writer.Write(username);
+            Writer.Flush();
+        }
+    }
+
+    public void SendDimensionUpdate()
+    {
+        lock (WriterLock)
+        {
+            Writer.Write((byte)21); // Packet ID 21: Dimension Update
+            Writer.Write((byte)CurrentDimension);
             Writer.Flush();
         }
     }

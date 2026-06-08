@@ -9,7 +9,7 @@ public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, 
 
 class Program
 {
-    public const string VERSION = "Bulletbox 26.1.1 Snapshot 03b";
+    public const string VERSION = "Bulletbox 26.1 Pre-Release 1";
     public static GameState CurrentState = GameState.SPLASH;
     public static UserData CurrentUser = new UserData(); 
     
@@ -161,7 +161,10 @@ class Program
                 case GameState.SINGLEPLAYER_CONNECTING:
                     if (!ServerProgram.IsRunning) _ = ServerProgram.RunServerAsync(); // This should probably be awaitaed or handled differently for proper server startup
                     homeScreen.Update(windowResizedThisFrame); // Update background
-
+                    if (!ServerProgram.BulletboxWorld.IsLoaded) // Check if world is already loaded
+                    {
+                        ServerProgram.BulletboxWorld.IsLoaded = ServerProgram.LoadGame(); // Attempt to load game
+                    }
                     if (PlayingState == null)
                     {
                         PlayingState = new Playing(string.IsNullOrEmpty(CurrentUser.Username) ? "Player" : CurrentUser.Username);
@@ -204,6 +207,7 @@ class Program
                     if (PlayingState != null && PlayingState.CurrentHealth <= 0) 
                     {
                         AudioManager.StopAll();
+                        if (LastIP == "127.0.0.1") ServerProgram.SaveGame(); // Save on death for single-player
                         AudioManager.PlaySound("player_death");
                         Program.DisconnectAndLeave(GameState.DEATH);
                     }
@@ -299,7 +303,7 @@ class Program
         float volume = 0.20f;
 
         // 1. Select Target Track & State
-        if (IsEnding)
+        if (IsEnding || (CurrentState == GameState.PLAYING && Net.CurrentDimension == Dimension.TheEnd))
         {
             targetMusic = "end_animation";
             volume = 0.5f; // Ending music should be clear and dramatic
@@ -368,12 +372,14 @@ class Program
 
     public static void DisconnectAndLeave(GameState targetState = GameState.HOME)
     {
+        if (LastIP == "127.0.0.1") ServerProgram.SaveGame(); // Save on disconnect for single-player
         Net.Disconnect();
         LanDiscovery.StopListening();
         LanDiscovery.StopBroadcasting();
         ServerProgram.IsRunning = false;
         PlayingState = null;   
-        IsPaused = false;      
+        IsPaused = false;
+        IsEnding = false;
         Raylib.ShowCursor();
         CurrentState = targetState;
     }

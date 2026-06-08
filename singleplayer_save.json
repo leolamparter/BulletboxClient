@@ -1,0 +1,141 @@
+{
+  "Seed": 19771,
+  "Players": [
+    {
+      "Username": "LeonardoDCapitan",
+      "Health": 100,
+      "MaxHealth": 100,
+      "Hunger": 100,
+      "Position": {
+        "X": 450.73083,
+        "Y": 214.27216
+      },
+      "Rotation": -157.6718,
+      "IsBlocking": false,
+      "CurrentDimension": 0,
+      "SelectedSlot": 0,
+      "AshenTime": 0,
+      "BrimstalkerCooldown": 0,
+      "Inventory": [
+        {
+          "ItemID": "iron_sword",
+          "Count": 1
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        }
+      ],
+      "CraftingSlot1": {
+        "ItemID": "none",
+        "Count": 0
+      },
+      "CraftingSlot2": {
+        "ItemID": "none",
+        "Count": 0
+      }
+    }
+  ],
+  "Raiders": [],
+  "ActiveBombs": [],
+  "ActiveGusts": [],
+  "Structures": {},
+  "WorldTime": 3.154635,
+  "FlickerSpawnTimer": 3.154635,
+  "PlayerRegenTimer": 0.15463357,
+  "RaidTimer": 9999,
+  "RaidActive": false,
+  "ActiveRaidOutpostPosition": null
+}

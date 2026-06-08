@@ -14,7 +14,15 @@ public enum BiomeType : byte
     BrimstoneSprings = 6,
     River = 7,
     AshenWastelands = 8,
-    LavaPool = 9
+    LavaPool = 9,
+    TheEnd = 10,
+    Void = 11
+}
+
+public enum Dimension : byte
+{
+    Overworld = 0,
+    TheEnd = 1
 }
 
 public enum ServerFeatureType : byte
@@ -96,6 +104,7 @@ public class RaiderBot
     public float ChargeCooldown = 15f; // Initial delay
     public Vector2 ChargeDirection = Vector2.Zero;
     public bool HasDealtChargeDamage = false;
+    public Dimension Dimension = Dimension.Overworld;
     public RaiderBot(string name, Vector2 pos) { Name = name; Position = pos; }
 }
 
@@ -112,14 +121,15 @@ public class ServerWorld
     public List<RaiderBot> Raiders = new();
     public List<ServerBomb> ActiveBombs = new();
     public List<ServerGust> ActiveGusts = new(); // NEW
-    public Vector2? ActiveRaidOutpostPosition = null; // NEW FIELD HERE
+    public SerializableVector2? ActiveRaidOutpostPosition = null; // NEW FIELD HERE
 
     // Storage for world structures like Raid Outposts
     public ConcurrentDictionary<(int, int), Structure> Structures = new();
 
     // Cache for generated world data
-    private Dictionary<(int, int), ServerChunk> _chunks = new();
+    public Dictionary<(int, int, Dimension), ServerChunk> _chunks = new();
     private readonly object _worldLock = new();
+    public bool IsLoaded { get; set; } = false; // Flag to indicate if world data has been loaded
 
     public ServerWorld()
     {
@@ -142,16 +152,29 @@ public class ServerWorld
         }
     }
 
-    public ServerChunk GetOrGenerateChunk(int chunkX, int chunkY)
+    public ServerChunk GetOrGenerateChunk(int chunkX, int chunkY, Dimension dimension = Dimension.Overworld)
     {
         lock (_worldLock)
         {
-            if (_chunks.TryGetValue((chunkX, chunkY), out var chunk))
+            if (_chunks.TryGetValue((chunkX, chunkY, dimension), out var chunk))
                 return chunk;
 
             // Apply the seed as a coordinate offset to "shift" the noise map
             float sx = chunkX + (Seed % 5000); 
             float sy = chunkY + (Seed / 5000);
+
+            if (dimension == Dimension.TheEnd)
+            {
+                // Calculate distance from center for circular island logic
+                float dist = MathF.Sqrt(chunkX * chunkX + chunkY * chunkY);
+                // Add noise to the radius to make it a "rough" circle
+                float edgeNoise = (Perlin.Noise(sx * 0.1f, sy * 0.1f) + 1f) * 8f; 
+                BiomeType endBiome = (dist > 150f + edgeNoise) ? BiomeType.Void : BiomeType.TheEnd;
+
+                chunk = new ServerChunk(chunkX, chunkY, endBiome);
+                _chunks[(chunkX, chunkY, dimension)] = chunk;
+                return chunk;
+            }
 
             // Dedicated low-frequency noise for rare but massive oceans
             float oceanNoise = (Perlin.Noise(sx * 0.003f, sy * 0.003f) + 1f) * 0.5f;
@@ -267,7 +290,7 @@ public class ServerWorld
                 }
             }
 
-            _chunks[(chunkX, chunkY)] = chunk;
+            _chunks[(chunkX, chunkY, dimension)] = chunk;
 
             // Structure Generation: 0.005% chance per chunk (1 in 20,000)
             Random rng = new Random(fHash);

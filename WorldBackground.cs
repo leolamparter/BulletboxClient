@@ -32,7 +32,9 @@ public class WorldBackground
         new Color(210, 95, 60, 255),   // 6: Brimstone
         new Color(75, 150, 210, 255),  // 7: River
         new Color(34, 14, 14, 255),    // 8: Ashen Wastelands (Base: #220e0e)
-        new Color(202, 28, 28, 255)    // 9: Lava Pool (Base: #ca1c1c)
+        new Color(202, 28, 28, 255),    // 9: Lava Pool (Base: #ca1c1c)
+        new Color(40, 40, 40, 255),    // 10: The End (Base: Dark Gray)
+        new Color(0, 0, 0, 255)        // 11: Void (Solid Black)
     };
 
     private void LoadFeatureAssets()
@@ -111,7 +113,29 @@ public class WorldBackground
                 (int)(202 + (223 - 202) * t2),
                 (int)(28 + (139 - 28) * t2),
                 (int)(28 + (28 - 28) * t2),
+                    255);
+            }
+            if (biome == BiomeType.TheEnd) // The End: Dark gray mixed with lighter gray
+            {
+                if (noise < 0.5f)
+                {
+                    float t = noise * 2.0f;
+                    return new Color(
+                        (int)(40 + (60 - 40) * t),
+                        (int)(40 + (60 - 40) * t),
+                        (int)(40 + (60 - 40) * t),
+                        255);
+                }
+                float t2 = (noise - 0.5f) * 2.0f;
+                return new Color(
+                    (int)(60 + (80 - 60) * t2),
+                    (int)(60 + (80 - 60) * t2),
+                    (int)(60 + (80 - 60) * t2),
                 255);
+        }
+        if (biome == (BiomeType)11) // Void
+        {
+            return Color.Black;
         }
         // Apply color variation to other biomes
         switch (biome)

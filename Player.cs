@@ -183,9 +183,22 @@ public class Player
         bool isBrimstalker = Name == "Brimstalker";
         bool isFlicker = Name.StartsWith("Flicker");
         bool isVortex = Name.StartsWith("Vortex");
+        bool isApex = Name == "APEX";
+
+        float apexScale = 1.0f;
+        if (isApex)
+        {
+            apexScale = 2.0f;
+            float hpPct = Health / (float)MaxHealth;
+            if (hpPct > 0.8f) isRaider = true;
+            else if (hpPct > 0.6f) isFlicker = true;
+            else if (hpPct > 0.4f) isVortex = true;
+            else isBrimstalker = true;
+        }
 
         float currentScale = 1.0f;
         if (isFlicker) currentScale = 0.5f; // Flicker is 50% smaller
+        if (isApex) currentScale = apexScale;
 
         if (isRaider || isBrimstalker || isFlicker || isVortex)
         {

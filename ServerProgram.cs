@@ -6,6 +6,10 @@ using System.Threading.Tasks;
 using System.Numerics;
 using System.Diagnostics;
 
+using System.Text.Json;
+using System.Linq;
+using System.IO;
+
 public class ServerProgram
 {
     public static ServerWorld BulletboxWorld = new ServerWorld();
@@ -15,6 +19,10 @@ public class ServerProgram
     private static float _playerRegenTimer = 0f;
     private static float _worldTime = 0f;
     private static float _flickerSpawnTimer = 0f;
+    private static float _autoSaveTimer = 0f;
+
+    private const string SinglePlayerSavePath = "singleplayer_save.json";
+    public static Dictionary<string, PlayerSaveData> LoadedPlayers = new(); // Holds player data by username after loading
 
     public static async Task RunServerAsync()
     {
@@ -22,13 +30,6 @@ public class ServerProgram
         IsRunning = true;
 
         Random rand = new Random();
-
-        // Reset world state for a clean restart
-        BulletboxWorld.RaidActive = false;
-        BulletboxWorld.RaidTimer = 9999f;
-        _raidInitialTotalHealth = 0;
-        BulletboxWorld.ActiveRaidOutpostPosition = null; // Clear active outpost on server restart
-        BulletboxWorld.Raiders.Clear(); // Clear any existing raiders
 
         TcpListener listener = new TcpListener(IPAddress.Any, 32308); // Listener for incoming client connections
         listener.Start(); // Start listening for client connections
@@ -44,6 +45,12 @@ public class ServerProgram
                 // Wait for the next tick
                 await Task.Delay(16); 
                 if (Program.IsPaused && Program.LastIP == "127.0.0.1") continue;
+
+                _autoSaveTimer += dt;
+                if (_autoSaveTimer >= 30f) { // Save every 30 seconds
+                    SaveGame();
+                    _autoSaveTimer = 0f;
+                }
 
                 _worldTime += dt;
                 // Simple 10-minute cycle: 5 mins Day (0-300s), 5 mins Night (300-600s)
@@ -170,7 +177,7 @@ public class ServerProgram
                 lock(ConnectedPlayers) {
                     foreach(var p in ConnectedPlayers) {
                         Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
-                        var chunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(pPos.X / 16), (int)MathF.Floor(pPos.Y / 16));
+                        var chunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(pPos.X / 16), (int)MathF.Floor(pPos.Y / 16), p.CurrentDimension);
                         
                         if (chunk.Biome == BiomeType.AshenWastelands) {
                             p.AshenTime += dt;
@@ -188,7 +195,37 @@ public class ServerProgram
                 lock(ConnectedPlayers) {
                     foreach(var p in ConnectedPlayers) {
                         Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
-                        var chunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(pPos.X / 16), (int)MathF.Floor(pPos.Y / 16));
+                        var chunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(pPos.X / 16), (int)MathF.Floor(pPos.Y / 16), p.CurrentDimension);
+                        
+                        if (p.CurrentDimension == Dimension.TheEnd && chunk.Biome == BiomeType.Void) {
+                            // Push player toward the center of the island
+                            Vector2 pushDir = Vector2.Normalize(Vector2.Zero - pPos);
+                            float pushForce = 30f; // Force to push the player back
+                            lock (p.WriterLock) {
+                                p.Writer.Write((byte)7); // Packet ID 7: Knockback
+                                p.Writer.Write(pushDir.X * pushForce);
+                                p.Writer.Write(pushDir.Y * pushForce);
+                                p.Writer.Flush();
+                            }
+                            p.Damage(1); // Constant damage while in the void
+                            p.SyncHealth();
+                        }
+                        
+                        // Check for Portal Teleport
+                        if (p.CurrentDimension == Dimension.TheEnd)
+                        {
+                            var portal = BulletboxWorld.Structures.Values.FirstOrDefault(s => s.Type == StructureType.EndPortal);
+                            if (portal != null && Vector2.Distance(p.Position, portal.Position) < 80f) // 5 chunks radius = 80 units
+                            {
+                                p.CurrentDimension = Dimension.Overworld;
+                                p.Position = Vector2.Zero;
+                                BulletboxWorld.UpdatePosition(p.Username, 0, 0);
+                                p.SendDimensionUpdate();
+                                BulletboxWorld.Structures.TryRemove((portal.ChunkX, portal.ChunkY), out _); // Destroy portal
+                                p.BroadcastChat("SYSTEM", $"{p.Username} escaped The End!");
+                            }
+                        }
+
                         if (chunk.Biome == BiomeType.LavaPool) {
                             p.Damage(1); // Tick damage while standing in lava
                             p.SyncHealth();
@@ -198,10 +235,24 @@ public class ServerProgram
                 lock(BulletboxWorld.Raiders) {
                     for (int i = BulletboxWorld.Raiders.Count - 1; i >= 0; i--) {
                         var bot = BulletboxWorld.Raiders[i];
-                        var chunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(bot.Position.X / 16), (int)MathF.Floor(bot.Position.Y / 16));
+                        var chunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(bot.Position.X / 16), (int)MathF.Floor(bot.Position.Y / 16), bot.Dimension);
+                        
+                        if (bot.Dimension == Dimension.TheEnd && chunk.Biome == BiomeType.Void) {
+                            Vector2 pushDir = Vector2.Normalize(Vector2.Zero - bot.Position);
+                            bot.Velocity += pushDir * 1500f * dt;
+                        }
+
                         if (chunk.Biome == BiomeType.LavaPool) {
                             bot.Health -= 1; // Tick damage while standing in lava
                             if (bot.Health <= 0) {
+                                if (bot.Name == "APEX")
+                                {
+                                    // Spawn escape portal at (0,0)
+                                    Vector2 portalPos = Vector2.Zero;
+                                    Structure portal = new Structure(portalPos, StructureType.EndPortal, 0, 0, "");
+                                    BulletboxWorld.Structures.TryAdd((0, 0), portal);
+                                }
+                                
                                 BulletboxWorld.Raiders.RemoveAt(i); // Remove if dead
                                 lock (ConnectedPlayers) {
                                     foreach (var p in ConnectedPlayers) p.SendLeaveSignal(bot.Name);
@@ -383,10 +434,11 @@ public class ServerProgram
                 // Populate the chest inventory for the outpost that was just defeated
                 if (BulletboxWorld.ActiveRaidOutpostPosition.HasValue)
                 {
-                    Vector2 pos = BulletboxWorld.ActiveRaidOutpostPosition.Value;
-                    Structure? s = BulletboxWorld.Structures.Values.FirstOrDefault(st => st.Position == pos);
-                    if (s != null && s.ChestInventory == null)
+                    Vector2 pos = (Vector2)BulletboxWorld.ActiveRaidOutpostPosition.Value;
+                    Structure? s = BulletboxWorld.Structures.Values.FirstOrDefault(st => (Vector2)st.Position == pos && st.RaidActive);
+                    if (s != null)
                     {
+                        s.RaidActive = false;
                         s.IsCompleted = true; // Mark as completed for chest access after victory
                         s.ChestInventory = new ServerItemStack[18];
                     for (int j = 0; j < 18; j++) s.ChestInventory[j] = new ServerItemStack("none", 0);
@@ -423,6 +475,7 @@ public class ServerProgram
                 float minDist = float.MaxValue;
                 lock(ConnectedPlayers) {
                     foreach(var p in ConnectedPlayers) {
+                        if (p.CurrentDimension != bot.Dimension) continue;
                         float d = Vector2.Distance(bot.Position, BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero));
                         if (d < minDist) { minDist = d; target = p; }
                     }
@@ -433,13 +486,20 @@ public class ServerProgram
                     bot.WanderTarget = null;
                     Vector2 targetPos = BulletboxWorld.PlayerLocations[target.Username];
 
+                    // APEX Evolutions based on Health
+                    if (bot.Name == "APEX")
+                    {
+                        float hpPct = bot.Health / (float)bot.MaxHealth;
+                        if (hpPct <= 0.8f) bot.HeldItemID = "none"; // Switch to special moves
+                    }
+
                     // Unique strafe and target offset per raider to prevent marching in sync
                     int hash = bot.Name.GetHashCode();
                     Vector2 targetOffset = new Vector2(MathF.Cos(hash) * 35f, MathF.Sin(hash) * 35f);
                     Vector2 dir = Vector2.Normalize((targetPos + targetOffset) - bot.Position);
                     
                     // Flicker Teleportation Logic (re-added here as it was removed in previous diff)
-                    if (bot.Name.StartsWith("Flicker"))
+                    if (bot.Name.StartsWith("Flicker") || (bot.Name == "APEX" && bot.Health / (float)bot.MaxHealth <= 0.8f))
                     {
                         if (bot.Health < bot.PreviousHealth)
                         {
@@ -458,7 +518,7 @@ public class ServerProgram
                         if (bot.Health < 30 && bot.FleeTimer <= 0 && rand.Next(100) < 1) bot.FleeTimer = 8.0f;
                     }
 
-                    if (bot.FleeTimer > 0) { bot.FleeTimer -= dt; dir = -dir; }
+                    if (bot.FleeTimer > 0 && bot.Name != "APEX") { bot.FleeTimer -= dt; dir = -dir; }
 
                     Vector2 sideStepDir = new Vector2(-dir.Y, dir.X);
                     float strafeFreq = 2.0f + (Math.Abs(hash) % 300 / 100f);
@@ -467,7 +527,9 @@ public class ServerProgram
 
                     bot.Rotation = (float)(Math.Atan2(dir.Y, dir.X) * (180.0 / Math.PI));
 
-                    if (bot.Name == "Brimstalker" || (bot.Name.StartsWith("Flicker") && minDist < 250f)) {
+                    float apexHpPct = bot.Name == "APEX" ? bot.Health / (float)bot.MaxHealth : 1.0f;
+
+                    if (bot.Name == "Brimstalker" || (bot.Name.StartsWith("Flicker") && minDist < 250f) || (bot.Name == "APEX" && apexHpPct <= 0.4f)) {
                         // Charge Attack State Machine (Shared by Brimstalker and Aggroed Flicker)
                         if (bot.ChargePhase == 0) {
                             bot.ChargeCooldown -= dt;
@@ -512,7 +574,7 @@ public class ServerProgram
                             continue; // Skip normal movement/bomb logic during charge lunge
                         }
                     }
-                    else if (bot.Name.StartsWith("Vortex")) // NEW Vortex AI
+                    else if (bot.Name.StartsWith("Vortex") || (bot.Name == "APEX" && apexHpPct <= 0.6f && apexHpPct > 0.4f)) // NEW Vortex AI
                     {
                         float desiredDistance = 300f; // 300 units away
                         float vortexMoveSpeed = 220f; 
@@ -553,8 +615,9 @@ public class ServerProgram
                     }
 
                     // Enforce raid boundary for raiders
-                    if (BulletboxWorld.ActiveRaidOutpostPosition is Vector2 outpostCenter)
+                    if (BulletboxWorld.ActiveRaidOutpostPosition.HasValue)
                     {
+                        Vector2 outpostCenter = BulletboxWorld.ActiveRaidOutpostPosition.Value;
                         const float boundaryRadius = 120f * 16f; // 120 Chunks = 1920 Units
                         Vector2 offset = bot.Position - outpostCenter;
                         if (offset.Length() > boundaryRadius)
@@ -563,10 +626,10 @@ public class ServerProgram
                         }
                     }
 
-                    if (!bot.Name.StartsWith("Vortex"))
+                    if (!bot.Name.StartsWith("Vortex") && !(bot.Name == "APEX" && apexHpPct <= 0.6f && apexHpPct > 0.4f))
                     {
                         bot.AttackTimer += dt;
-                        if (bot.Name == "Brimstalker") {
+                        if (bot.Name == "Brimstalker" || (bot.Name == "APEX" && apexHpPct <= 0.4f)) {
                             // Brimstalker Bomb Attack AI
                             if (bot.AttackTimer >= bot.AttackCooldown) {
                                 bot.AttackCooldown = 1.0f + (float)rand.NextDouble() * 1.0f;
@@ -611,16 +674,18 @@ public class ServerProgram
                 foreach (var other in botsToUpdate) {
                     if (bot == other) continue;
                     float d = Vector2.Distance(bot.Position, other.Position);
-                    if (d < 45f && d > 0.1f) {
-                        bot.Position += Vector2.Normalize(bot.Position - other.Position) * (45f - d) * 0.5f;
+                    float overlapRadius = (bot.Name == "APEX" || other.Name == "APEX") ? 90f : 45f;
+                    if (d < overlapRadius && d > 0.1f) {
+                        bot.Position += Vector2.Normalize(bot.Position - other.Position) * (overlapRadius - d) * 0.5f;
                     }
                 }
                 lock(ConnectedPlayers) {
                     foreach (var p in ConnectedPlayers) {
                         Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
                         float d = Vector2.Distance(bot.Position, pPos);
-                        if (d < 45f && d > 0.1f) {
-                            bot.Position += Vector2.Normalize(bot.Position - pPos) * (45f - d) * 0.5f;
+                        float overlapRadius = (bot.Name == "APEX") ? 90f : 45f;
+                        if (d < overlapRadius && d > 0.1f) {
+                            bot.Position += Vector2.Normalize(bot.Position - pPos) * (overlapRadius - d) * 0.5f;
                         }
                     }
                 }
@@ -629,7 +694,7 @@ public class ServerProgram
             }
         }
 
-        void BroadcastRaidUpdate(byte type, float val, Vector2? outpostCenter = null) {
+        void BroadcastRaidUpdate(byte type, float val, SerializableVector2? outpostCenter = null) {
             lock (ConnectedPlayers) {
                 foreach (var p in ConnectedPlayers) {
                     try { lock (p.WriterLock) { 
@@ -678,6 +743,7 @@ public class ServerProgram
                 foreach (var p in ConnectedPlayers) {
                     try {
                         lock (p.WriterLock) {
+                            if (p.CurrentDimension != bot.Dimension) continue; // Optimization: Only sync to same dimension
                             p.Writer.Write((byte)1); 
                             p.Writer.Write(bot.Name); 
                             p.Writer.Write(bot.Position.X);
@@ -722,5 +788,162 @@ public class ServerProgram
         }
         catch (Exception ex) { Console.WriteLine($"[Server] Error: {ex.Message}"); }
         finally { listener.Stop(); IsRunning = false; }
+    }
+
+    public static void SpawnAPEX(ServerWorld world)
+    {
+        var apex = new RaiderBot("APEX", new Vector2(100, 100)) { 
+            MaxHealth = 2500, Health = 2500, PreviousHealth = 2500, 
+            HeldItemID = "brimstone_sword", Dimension = Dimension.TheEnd 
+        };
+        lock(world.Raiders) { world.Raiders.Add(apex); }
+        world.RaidActive = true;
+        world.ActiveRaidOutpostPosition = null; // Bosses are not outposts
+        _raidInitialTotalHealth = 2500;
+        Console.WriteLine("[Server] APEX Boss spawned in The End.");
+    }
+
+    public static void SaveGame() {
+        if (!IsRunning || Program.LastIP != "127.0.0.1") return;
+
+        // PROTECTION: If no players are connected, don't save. 
+        // This prevents the server from wiping the save file if it ticks while a player is joining/leaving.
+        lock (ConnectedPlayers) {
+            if (ConnectedPlayers.Count == 0) return;
+        }
+
+        Console.WriteLine("[Server] Saving game state...");
+        WorldSaveData saveData = new WorldSaveData();
+        saveData.Seed = BulletboxWorld.Seed;
+
+        lock (ConnectedPlayers) {
+            foreach (var p in ConnectedPlayers) {
+                saveData.Players.Add(new PlayerSaveData {
+                    Username = p.Username, Health = p.Health, MaxHealth = p.MaxHealth, Hunger = p.Hunger,
+                    Position = p.Position, Rotation = p.Rotation, IsBlocking = p.IsBlocking,
+                    CurrentDimension = p.CurrentDimension, SelectedSlot = p.SelectedSlot,
+                    AshenTime = p.AshenTime, BrimstalkerCooldown = p.BrimstalkerCooldown,
+                    Inventory = p.Inventory, CraftingSlot1 = p.CraftingSlot1, CraftingSlot2 = p.CraftingSlot2
+                });
+            }
+        }
+
+        lock (BulletboxWorld.Raiders) {
+            foreach (var r in BulletboxWorld.Raiders) {
+                saveData.Raiders.Add(new RaiderSaveData {
+                    Name = r.Name, Position = r.Position, Velocity = r.Velocity,
+                    Health = r.Health, PreviousHealth = r.PreviousHealth, MaxHealth = r.MaxHealth,
+                    Rotation = r.Rotation, AttackTimer = r.AttackTimer, HeldItemID = r.HeldItemID,
+                    AttackCooldown = r.AttackCooldown, FleeTimer = r.FleeTimer,
+                    WanderTarget = r.WanderTarget, WanderWaitTimer = r.WanderWaitTimer,
+                    ChargePhase = r.ChargePhase, ChargeTimer = r.ChargeTimer,
+                    ChargeCooldown = r.ChargeCooldown, ChargeDirection = r.ChargeDirection,
+                    HasDealtChargeDamage = r.HasDealtChargeDamage, Dimension = r.Dimension
+                });
+            }
+        }
+
+        saveData.ActiveBombs.AddRange(BulletboxWorld.ActiveBombs);
+        saveData.ActiveGusts.AddRange(BulletboxWorld.ActiveGusts);
+
+        lock (BulletboxWorld.Structures) {
+            foreach (var entry in BulletboxWorld.Structures)
+                saveData.Structures[$"{entry.Key.Item1},{entry.Key.Item2}"] = entry.Value;
+        }
+
+        saveData.WorldTime = _worldTime;
+        saveData.FlickerSpawnTimer = _flickerSpawnTimer;
+        saveData.PlayerRegenTimer = _playerRegenTimer;
+        saveData.RaidTimer = BulletboxWorld.RaidTimer;
+        saveData.RaidActive = BulletboxWorld.RaidActive;
+        saveData.ActiveRaidOutpostPosition = BulletboxWorld.ActiveRaidOutpostPosition;
+
+        try {
+            string jsonString = JsonSerializer.Serialize(saveData, new JsonSerializerOptions { WriteIndented = true, IncludeFields = true });
+            File.WriteAllText(SinglePlayerSavePath, jsonString);
+            Console.WriteLine("[Server] Game state saved successfully.");
+        } catch (Exception ex) {
+            Console.WriteLine($"[Server] Error saving game state: {ex.Message}");
+        }
+    }
+
+    public static bool LoadGame() {
+        if (!File.Exists(SinglePlayerSavePath)) return false;
+
+        Console.WriteLine("[Server] Loading game state...");
+        try {
+            string jsonString = File.ReadAllText(SinglePlayerSavePath);
+            WorldSaveData? saveData = JsonSerializer.Deserialize<WorldSaveData>(jsonString, new JsonSerializerOptions { IncludeFields = true });
+            if (saveData == null) return false;
+
+            BulletboxWorld = new ServerWorld();
+            BulletboxWorld.Seed = saveData.Seed;
+
+            // Helper to fix null ItemIDs that cause crashes (ServerItemStack is a struct, so inv[i] is never null)
+            Action<ServerItemStack[]?> sanitizeInventory = (inv) => {
+                if (inv == null) return;
+                for (int i = 0; i < inv.Length; i++) 
+                    if (inv[i].ItemID == null) inv[i].ItemID = "none";
+            };
+
+            lock (BulletboxWorld.Raiders) {
+                BulletboxWorld.Raiders.Clear();
+                foreach (var rData in saveData.Raiders) {
+                    var bot = new RaiderBot(rData.Name, rData.Position) {
+                        Velocity = rData.Velocity, Health = rData.Health,
+                        PreviousHealth = rData.PreviousHealth, MaxHealth = rData.MaxHealth,
+                        Rotation = rData.Rotation, AttackTimer = rData.AttackTimer,
+                        HeldItemID = rData.HeldItemID, AttackCooldown = rData.AttackCooldown,
+                        FleeTimer = rData.FleeTimer, WanderTarget = rData.WanderTarget,
+                        WanderWaitTimer = rData.WanderWaitTimer, ChargePhase = rData.ChargePhase,
+                        ChargeTimer = rData.ChargeTimer, ChargeCooldown = rData.ChargeCooldown,
+                        ChargeDirection = rData.ChargeDirection, HasDealtChargeDamage = rData.HasDealtChargeDamage,
+                        Dimension = rData.Dimension
+                    };
+                    BulletboxWorld.Raiders.Add(bot);
+                }
+            }
+
+            lock (BulletboxWorld.ActiveBombs) {
+                BulletboxWorld.ActiveBombs.Clear();
+                BulletboxWorld.ActiveBombs.AddRange(saveData.ActiveBombs);
+            }
+
+            lock (BulletboxWorld.ActiveGusts) {
+                BulletboxWorld.ActiveGusts.Clear();
+                BulletboxWorld.ActiveGusts.AddRange(saveData.ActiveGusts);
+            }
+
+            lock (BulletboxWorld.Structures) {
+                BulletboxWorld.Structures.Clear();
+                foreach (var entry in saveData.Structures) {
+                    string[] keyParts = entry.Key.Split(',');
+                    int cx = int.Parse(keyParts[0]);
+                    int cy = int.Parse(keyParts[1]);
+                    sanitizeInventory(entry.Value.ChestInventory);
+                    BulletboxWorld.Structures.TryAdd((cx, cy), entry.Value);
+                }
+            }
+
+            _worldTime = saveData.WorldTime;
+            _flickerSpawnTimer = saveData.FlickerSpawnTimer;
+            _playerRegenTimer = saveData.PlayerRegenTimer;
+            BulletboxWorld.RaidTimer = saveData.RaidTimer;
+            BulletboxWorld.RaidActive = saveData.RaidActive;
+            BulletboxWorld.ActiveRaidOutpostPosition = saveData.ActiveRaidOutpostPosition;
+
+            LoadedPlayers.Clear();
+            foreach (var pData in saveData.Players) {
+                if (pData == null || string.IsNullOrEmpty(pData.Username)) continue;
+                sanitizeInventory(pData.Inventory);
+                if (pData.CraftingSlot1.ItemID == null) pData.CraftingSlot1 = new ServerItemStack("none", 0);
+                if (pData.CraftingSlot2.ItemID == null) pData.CraftingSlot2 = new ServerItemStack("none", 0);
+                LoadedPlayers[pData.Username] = pData;
+            }
+            return true;
+        } catch (Exception ex) {
+            Console.WriteLine($"[Server] Error loading game state: {ex.Message}");
+            return false;
+        }
     }
 }

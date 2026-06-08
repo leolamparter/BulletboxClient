@@ -3,12 +3,13 @@ using System.Numerics;
 public enum StructureType : byte
 {
     None = 0,
-    RaidOutpost = 1
+    RaidOutpost = 1,
+    EndPortal = 2
 }
 
 public class Structure
 {
-    public Vector2 Position { get; set; }
+    public SerializableVector2 Position { get; set; }
     public StructureType Type { get; set; }
     public int ChunkX { get; set; }
     public int ChunkY { get; set; }

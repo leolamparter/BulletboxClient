@@ -124,6 +124,7 @@ public class Playing
     private float _cAttackTimer = 0f; 
     private float _cHitTimer = 10f;   
     private int _selectedHotbarIndex = 0;
+    private int _brimstonePearlSlot = -1;
     private int _lastLocalHealth = 100;
     private float _damageFlashTimer = 0f;
     private float _cameraShakeIntensity = 0f;
@@ -177,6 +178,8 @@ public class Playing
     private int _lastSortX = int.MaxValue;
     private int _lastSortY = int.MaxValue;
 
+    private bool _needsCacheClear = false;
+
     // Movement Tutorial State
     private bool _showMovementTutorial = false;
     private bool _tutorialFading = false;
@@ -199,7 +202,9 @@ public class Playing
         new Color(210, 95, 60, 255),   // 6: Brimstone
         new Color(75, 150, 210, 255), // 7: River
         new Color(34, 14, 14, 255),    // 8: Ashen Wastelands (Base: #220e0e)
-        new Color(202, 28, 28, 255)    // 9: Lava Pool (Base: #ca1c1c)
+        new Color(202, 28, 28, 255),    // 9: Lava Pool (Base: #ca1c1c)
+        new Color(40, 40, 40, 255),    // 10: The End (Base: Dark Gray)
+        new Color(0, 0, 0, 255)        // 11: Void (Solid Black)
     };
 
     public Playing(string myName)
@@ -539,8 +544,34 @@ public class Playing
         _kbVelocity += force * 15f; // Multiplier to turn 'distance' into 'velocity'
     } 
 
+    public void TriggerCacheClear()
+    {
+        _needsCacheClear = true;
+    }
+
+    private void ClearWorldCaches()
+    {
+        loadedChunks.Clear();
+        _chunkSnapshot.Clear();
+        _featureSnapshot.Clear();
+        _blendedColorCache.Clear();
+        _pendingBlends.Clear();
+        _sortedPending.Clear();
+        Structures.Clear();
+        _lastPlayerChunkX = int.MaxValue;
+        _lastPlayerChunkY = int.MaxValue;
+        LocalPlayer.Position = Vector2.Zero;
+        Cam.RaylibCamera.Target = new Vector2(32, 32); // Snap camera to player center
+    }
+
     public void Update(float dt, bool windowResized)
     {
+        if (_needsCacheClear)
+        {
+            ClearWorldCaches();
+            _needsCacheClear = false;
+        }
+
         int playerChunkX = 0;
         int playerChunkY = 0;
 
@@ -580,6 +611,22 @@ public class Playing
             Env.CurrentWeather = WeatherType.Clear;
             Env.WeatherTransition = 1.0f;
             
+            // Teleport to the end during the black screen (4.2 seconds) to avoid music glitches
+            if (_brimstonePearlSlot >= 0 && _endSequenceTimer >= 4.2f)
+            {
+                Program.Net.SendConsumeItem((byte)_brimstonePearlSlot);
+                _brimstonePearlSlot = -2; // Sentinel value: packet sent, waiting for dimension sync
+            }
+
+            // Return to gameplay once teleport is processed and sequence duration is finished
+            if (_brimstonePearlSlot == -2 && _endSequenceTimer >= 5.5f && Program.Net.CurrentDimension == Dimension.TheEnd)
+            {
+                _endSequenceTimer = -1f;
+                _brimstonePearlSlot = -1;
+                Program.IsEnding = false;
+                return;
+            }
+
             if (_endSequenceTimer > 25.0f) // Return home once credits have finished scrolling
             {
                 Program.IsEnding = false;
@@ -644,9 +691,10 @@ public class Playing
                 }
 
                 var stack = PlayerInventory.Slots[_selectedHotbarIndex];
-                if (!interacted && stack.ItemID == "brimstone_pearl")
+                if (!interacted && stack.ItemID == "brimstone_pearl" && Program.Net.CurrentDimension != Dimension.TheEnd)
                 {
                     _endSequenceTimer = 0f;
+                    _brimstonePearlSlot = _selectedHotbarIndex;
                     Program.IsEnding = true;
                     AudioManager.StopAll();
                     interacted = true;
@@ -801,6 +849,9 @@ public class Playing
                             case StructureType.RaidOutpost:
                                 textureName = "raid_outpost_center";
                                 break;
+                            case StructureType.EndPortal:
+                    textureName = "end_portal";
+                    break;
                             default:
                                 textureName = ""; // No texture for unknown types
                                 break;
@@ -1050,10 +1101,11 @@ public class Playing
                 hasBiome = Program.Net.ChunkBiomes.TryGetValue((playerChunkX, playerChunkY), out CurrentBiome);
             }
         }
-        // Ash should fall in both Ashen Wastelands and Lava Pools
-        if (hasBiome && (CurrentBiome == 8 || CurrentBiome == 9)) _ashFallAlpha = Math.Min(1.0f, _ashFallAlpha + dt * 0.5f); // Fade in
+        // Ash should fall in Ashen Wastelands and Lava Pools, but not in The End dimension
+        if (hasBiome && (CurrentBiome == (byte)BiomeType.AshenWastelands || CurrentBiome == (byte)BiomeType.LavaPool) && Program.Net.CurrentDimension != Dimension.TheEnd)
+            _ashFallAlpha = Math.Min(1.0f, _ashFallAlpha + dt * 0.5f); // Fade in
         else _ashFallAlpha = Math.Max(0.0f, _ashFallAlpha - dt * 0.5f); // Fade out
-
+        
         // Dust Storm logic: Only visible in Desert (2) or Beach (5)
         if (hasBiome && (CurrentBiome == 2 || CurrentBiome == 5)) _dustStormAlpha = Math.Min(1.0f, _dustStormAlpha + dt * 0.5f);
         else _dustStormAlpha = Math.Max(0.0f, _dustStormAlpha - dt * 0.5f);
@@ -1074,7 +1126,7 @@ public class Playing
                 }
             }
 
-            if ((isNearLava || isNearAshen) && r.Next(0, 100) < 15) {
+            if ((isNearLava || isNearAshen) && Program.Net.CurrentDimension != Dimension.TheEnd && r.Next(0, 100) < 15) {
                 Vector2 randomOffset = new Vector2(r.Next(-500, 500), r.Next(-500, 500));
                 // If nearby lava, 60% chance for orange, else red-ash
                 Color col = (isNearLava && r.Next(0, 10) < 6) ? new Color(255, 140, 20, 255) : new Color(110, 50, 45, 255);
@@ -1296,10 +1348,10 @@ public class Playing
         if (isMoving && !Program.IsPaused)
         {
             // Use unique colors for different biomes: Ash Gray for Ashen, Bright Orange for Lava
-            if (biome == 8 && new Random().Next(0, 100) < 15) 
+            if (biome == (byte)BiomeType.AshenWastelands && Program.Net.CurrentDimension != Dimension.TheEnd && new Random().Next(0, 100) < 15) 
                 SpawnEmber(LocalPlayer.Position + new Vector2(32, 58), new Color(110, 50, 45, 255));
-            else if (biome == 9 && new Random().Next(0, 100) < 15)
-                SpawnEmber(LocalPlayer.Position + new Vector2(32, 58), new Color(255, 140, 20, 255));
+            else if (biome == (byte)BiomeType.LavaPool && Program.Net.CurrentDimension != Dimension.TheEnd && new Random().Next(0, 100) < 15)
+                SpawnEmber(LocalPlayer.Position + new Vector2(32, 58), new Color(255, 140, 20, 255)); // Lava embers
         }
 
         // --- Footstep Sound Logic ---
@@ -1323,6 +1375,7 @@ public class Playing
                 5 => "beach",
                 6 => "stonypeaks", // Brimstone fallback
                 7 => "river", // River
+                10 => "stonypeaks", // The End fallback
                 8 => "stonypeaks", // Ashen Wastelands fallback
                 _ => ""
             };
@@ -1508,13 +1561,17 @@ public class Playing
                 lock (OthersLock) { combatTargets = Others.Values.ToList(); }
                 foreach (var other in combatTargets)
                 {
-                    Rectangle hitBox = new Rectangle(other.Position.X, other.Position.Y, 64, 64);
+                    // Increase hitbox size for the APEX boss
+                    float hitBoxSize = (other.Name == "APEX") ? 128f : 64f;
+                    float offset = (64f - hitBoxSize) / 2f;
+                    Rectangle hitBox = new Rectangle(other.Position.X + offset, other.Position.Y + offset, hitBoxSize, hitBoxSize);
+
                     float dist = Vector2.Distance(LocalPlayer.Position, other.Position);
 
                     if (Raylib.CheckCollisionPointRec(worldMouse, hitBox) && dist <= range)
                     {   
                         // Only allow attacking other players or raiders
-                        if (!other.Name.StartsWith("Raider") && !other.Name.StartsWith("Flicker") && !other.Name.StartsWith("Vortex") && other.Name != "Brimstalker" && other.Name != LocalPlayer.Name) continue;
+                        if (!other.Name.StartsWith("Raider") && !other.Name.StartsWith("Flicker") && !other.Name.StartsWith("Vortex") && other.Name != "Brimstalker" && other.Name != "APEX" && other.Name != LocalPlayer.Name) continue;
                         Console.WriteLine($"Attacking {other.Name} for {dmg} dmg!");
                         _lastAttackedName = other.Name;
                         Program.Net.SendAttack(other.Name);
@@ -1684,6 +1741,14 @@ public class Playing
         foreach (var structureEntry in Structures)
         {
             var structure = structureEntry.Value;
+
+            if (structure.Type == StructureType.EndPortal)
+            {
+                Raylib.DrawCircleV(structure.Position, 80, Color.Black); // 5 chunks radius = 80 units
+                Raylib.DrawCircleLines((int)structure.Position.X, (int)structure.Position.Y, 80, Color.Magenta);
+                continue;
+            }
+
             var tex = AssetManager.GetTexture(structure.TextureName);
             if (tex.Id != 0)
             {
@@ -2001,6 +2066,9 @@ public class Playing
             int sw = Raylib.GetScreenWidth();
             int sh = Raylib.GetScreenHeight();
             Raylib.DrawRectangle(0, 0, sw, sh, Color.Black);
+
+            // If we're teleporting via pearl, don't show the ending credits
+            if (_brimstonePearlSlot != -1) return;
 
             if (_endSequenceTimer >= 5.0f)
             {
@@ -2360,6 +2428,28 @@ public class Playing
                     (int)(28 + (139 - 28) * t2),
                     (int)(28 + (28 - 28) * t2),
                     255);
+            }
+            if (biome == (byte)BiomeType.TheEnd) // The End: Dark gray mixed with lighter gray
+            {
+                if (noise < 0.5f)
+                {
+                    float t = noise * 2.0f;
+                    return new Color(
+                        (int)(40 + (60 - 40) * t),
+                        (int)(40 + (60 - 40) * t),
+                        (int)(40 + (60 - 40) * t),
+                        255);
+                }
+                float t2 = (noise - 0.5f) * 2.0f;
+                return new Color(
+                    (int)(60 + (80 - 60) * t2),
+                    (int)(60 + (80 - 60) * t2),
+                    (int)(60 + (80 - 60) * t2),
+                    255);
+            }
+            if (biome == (byte)11) // Void
+            {
+                return Color.Black;
             }
 
             // Standard biome noise variation
