@@ -43,5 +43,5 @@ void main()
     float brightness = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
     if (brightness > 0.85) color.rgb += (color.rgb * (brightness - 0.85) * 2.0);
 
-    finalColor = vec4(color.rgb, color.a);
+    finalColor = vec4(color.rgb, color.a); // Final output color
 }

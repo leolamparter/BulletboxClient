@@ -70,7 +70,7 @@ public class ServerBomb
     public string OwnerName;
     public string TargetPlayer;
     public bool Exploded;
-    public ServerBomb(Vector2 pos, Vector2 vel, string owner) { Position = pos; Velocity = vel; Timer = 1.0f; OwnerName = owner; Exploded = false; TargetPlayer = ""; }
+    public ServerBomb(Vector2 pos, Vector2 vel, string owner) { Position = pos; Velocity = vel; Timer = 1.0f; OwnerName = owner; Exploded = false; TargetPlayer = ""; } // OwnerName can be player or bot
 }
 
 public class ServerGust // NEW

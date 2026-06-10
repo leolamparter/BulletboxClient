@@ -233,9 +233,12 @@ public class Connection
                     StructureType type = (StructureType)_reader.ReadByte();
                     float posX = _reader.ReadSingle();
                     float posY = _reader.ReadSingle();
+                    bool isCompleted = _reader.ReadBoolean();
                     lock (StructuresLock)
                     {
-                        Structures[(chunkX, chunkY)] = new Structure(new Vector2(posX, posY), type, chunkX, chunkY, "");
+                        var s = new Structure(new Vector2(posX, posY), type, chunkX, chunkY, "");
+                        s.IsCompleted = isCompleted;
+                        Structures[(chunkX, chunkY)] = s;
                     }
                 }
                 else if (packetId == 14) // Shield Block Sound Trigger

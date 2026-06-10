@@ -258,6 +258,7 @@ public class Playing
         // Load Hotbar UI Textures
         AssetManager.LoadTexture("hotbar_active", "resources/textures/ui/inventory/hotbar_active.png");
         AssetManager.LoadTexture("hotbar_deactive", "resources/textures/ui/inventory/hotbar_deactive.png");
+        AssetManager.LoadTexture("crafting_recepie_button", "resources/textures/ui/inventory/crafting_recepie_button.png");
 
         AssetManager.LoadTexture("small_tree", "resources/textures/feature/small_tree.png");
         AssetManager.LoadTexture("large_tree", "resources/textures/feature/large_tree.png");
@@ -574,11 +575,38 @@ public class Playing
 
     public void TriggerAdvancementPopup(string key)
     {
+        // This prevents popups for advancements achieved in previous sessions.
+        if (IsAdvancementAlreadyCompleted(key)) return;
+
         var adv = AdvancementsScreen.AllAdvancements.FirstOrDefault(a => a.Key == key);
         if (!string.IsNullOrEmpty(adv.Title))
         {
             _activePopups.Add(new AdvancementNotification(adv.Title));
         }
+    }
+
+    private bool IsAdvancementAlreadyCompleted(string key)
+    {
+        if (Program.CurrentUser == null) return false;
+
+        // Handle special advancements that are not simple boolean flags in the Advancements dictionary.
+        if (key == "EnterAllBiomes")
+        {
+            return Program.CurrentUser.VisitedBiomes.Count >= 10;
+        }
+        else if (key == "KillAllOverworld")
+        {
+            return Program.CurrentUser.KilledOverworld.Count >= 4;
+        }
+        else if (key == "GettingStronger")
+        {
+            return Program.CurrentUser.KilledOverworld.Count >= 25;
+        }
+        else if (key == "EnoughCrystalsAlready") return (Program.CurrentUser as dynamic).TotalQuartzObtained >= 20;
+        else if (key == "ThatsEnoughCrystalsNo") return (Program.CurrentUser as dynamic).TotalQuartzObtained >= 99;
+        else if (key == "StopItWithTheCrystals") return (Program.CurrentUser as dynamic).TotalQuartzObtained >= 198;
+        // For all other advancements, check if the key exists in the Advancements dictionary.
+        return Program.CurrentUser.Advancements.ContainsKey(key);
     }
 
     private void UpdatePopups(float dt)
@@ -777,6 +805,10 @@ public class Playing
                 foreach (var s in Structures.Values) {
                     // Check for right-clicking structures (Chests) - Server validates IsCompleted
                     if (Vector2.Distance(worldMouse, s.Position) < 150f && s.Type == StructureType.RaidOutpost) {
+                        if (s.IsCompleted)
+                        {
+                            s.HasBeenOpened = true;
+                        }
                         Program.Net.SendOpenChest(s.ChunkX, s.ChunkY);
                         interacted = true;
                         break;
@@ -951,8 +983,14 @@ public class Playing
                         }
                         if (!string.IsNullOrEmpty(textureName))
                         {
-                            Structures.Add(coord, new Structure(structureEntry.Value.Position, structureEntry.Value.Type, structureEntry.Value.ChunkX, structureEntry.Value.ChunkY, textureName));
+                            var newS = new Structure(structureEntry.Value.Position, structureEntry.Value.Type, structureEntry.Value.ChunkX, structureEntry.Value.ChunkY, textureName);
+                            newS.IsCompleted = structureEntry.Value.IsCompleted;
+                            Structures.Add(coord, newS);
                         }
+                    }
+                    else if (Structures.TryGetValue(coord, out var existingS))
+                    {
+                        existingS.IsCompleted = structureEntry.Value.IsCompleted;
                     }
                 }
                 // Remove structures that are no longer in loaded chunks
@@ -977,10 +1015,26 @@ public class Playing
                 if (RaidTimer > 3.0f || RaidTimer <= 0) _hasPlayedCountdown = false;
             }
 
-            if (_wasRaidActive && !RaidActive && RaidBossHealth <= 0 && !Program.CurrentUser.RaidCompletedTutorialFinnished)
+            if (_wasRaidActive && !RaidActive && RaidBossHealth <= 0)
             {
-                _raidTutorialStage = RaidTutorialStage.CompletionMessage;
-                _raidTutorialAlpha = 1.0f;
+                // Mark the local outpost as completed to show the "Open" text immediately
+                if (_fixedRaidOutpostPosition.HasValue)
+                {
+                    foreach (var s in Structures.Values)
+                    {
+                        if (Vector2.Distance(s.Position, _fixedRaidOutpostPosition.Value) < 50f)
+                        {
+                            s.IsCompleted = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!Program.CurrentUser.RaidCompletedTutorialFinnished)
+                {
+                    _raidTutorialStage = RaidTutorialStage.CompletionMessage;
+                    _raidTutorialAlpha = 1.0f;
+                }
             }
             _wasRaidActive = RaidActive;
 
@@ -1071,7 +1125,7 @@ public class Playing
             _kbVelocity = Vector2.Lerp(_kbVelocity, Vector2.Zero, dt * 6.5f); // Smooth friction
 
             // Raid Boundary Enforcement: Clamp player within 120 chunks of the active outpost
-            // Use _fixedRaidOutpostPosition if a raid is active or approaching
+            // Use _fixedRaidOutpostPosition aaif a raid is active or approaching
             if ((RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f)) && _fixedRaidOutpostPosition.HasValue)
             {
                 Vector2 activeOutpostCenter = _fixedRaidOutpostPosition.Value;
@@ -1258,6 +1312,16 @@ public class Playing
                 _lastOtherPositions[kvp.Key] = kvp.Value.Position;
             }
         }
+
+        // Update Structure Text Alpha Fading
+        foreach (var s in Structures.Values)
+        {
+            if (s.HasBeenOpened && s.TextFadeAlpha > 0)
+            {
+                s.TextFadeAlpha -= dt * 2.0f; // Fade out over 0.5 seconds
+                if (s.TextFadeAlpha < 0) s.TextFadeAlpha = 0;
+            }
+        }
         
         UpdateAudioSystem(dt, CurrentBiome, RaidActive);
     }
@@ -1294,7 +1358,7 @@ public class Playing
                     if (_chatInput.StartsWith("time="))
                     {
                         if (float.TryParse(_chatInput.Substring(5), out float newTime))
-                        {
+                        { // This is client-side only for now
                             Env.CurrentTime = Math.Clamp(newTime, 0f, WorldEnvironment.DayLength);
                             AddChatMessage("SYSTEM", $"Time set to {Env.CurrentTime:F1}s");
                         }
@@ -1662,7 +1726,7 @@ public class Playing
                     float dist = Vector2.Distance(LocalPlayer.Position, other.Position);
 
                     if (Raylib.CheckCollisionPointRec(worldMouse, hitBox) && dist <= range)
-                    {   
+                    {
                         // Only allow attacking other players or raiders
                         if (!other.Name.StartsWith("Raider") && !other.Name.StartsWith("Flicker") && !other.Name.StartsWith("Vortex") && other.Name != "Brimstalker" && other.Name != "APEX" && other.Name != LocalPlayer.Name) continue;
                         Console.WriteLine($"Attacking {other.Name} for {dmg} dmg!");
@@ -1851,6 +1915,18 @@ public class Playing
                     structure.Position.Y - (tex.Height * scale) / 2f
                 );
                 Raylib.DrawTextureEx(tex, drawPos, 0f, scale, Color.White);
+            }
+
+            // Draw "Right Click To Open" text for completed raids
+            if (structure.Type == StructureType.RaidOutpost && structure.IsCompleted && structure.TextFadeAlpha > 0.01f)
+            {
+                float bounce = MathF.Sin((float)Raylib.GetTime() * 5.0f) * 12.0f;
+                int fontSize = 24;
+                string text = "Right Click To Open";
+                int textWidth = Raylib.MeasureText(text, fontSize);
+                Vector2 textPos = new Vector2(structure.Position.X - textWidth / 2f, structure.Position.Y - 100 + bounce);
+                Color textColor = new Color(255, 255, 0, (int)(structure.TextFadeAlpha * 255));
+                Raylib.DrawText(text, (int)textPos.X, (int)textPos.Y, fontSize, textColor);
             }
         }
 

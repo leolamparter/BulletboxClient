@@ -12,7 +12,7 @@ using System.IO;
 
 public class ServerProgram
 {
-    public static ServerWorld BulletboxWorld = new ServerWorld();
+    public static ServerWorld BulletboxWorld = new();
     public static List<ServerPlayer> ConnectedPlayers = new List<ServerPlayer>();
     public static bool IsRunning = false;
     private static float _raidInitialTotalHealth = 0f;
@@ -198,6 +198,16 @@ public class ServerProgram
                             TriggerAdvancement(p, "EnterAshen");
                             // Spawns after 1 minute in the biome
                             if (p.AshenTime > 60f && p.BrimstalkerCooldown <= 0f && !BulletboxWorld.RaidActive) {
+                                    // Advancement: This Seems Safe
+                                    if (!p.HasIronOrDiamondWeapons())
+                                    {
+                                        TriggerAdvancement(p, "ThisSeemsSafe");
+                                    }
+                                    else
+                                    {
+                                        // If they have weapons, reset the advancement trigger for next time
+                                        p.TriggeredAdvancements.Remove("ThisSeemsSafe");
+                                    }
                                 SpawnBrimstalker(pPos, rand);
                                 TriggerAdvancement(p, "SpawnBrimstalker");
                                 p.BrimstalkerCooldown = 300f; // 5 minute cooldown
@@ -208,10 +218,27 @@ public class ServerProgram
                         // Dimension and Biome Discovery
                         if (p.LastKnownBiome != chunk.Biome)
                         {
+                            p.VisitedBiomes.Add(chunk.Biome);
                             TriggerAdvancement(p, "EnterBiome:" + (byte)chunk.Biome);
+                            
+                            // Specific biome advancements
+                            if (chunk.Biome == BiomeType.Meadow) TriggerAdvancement(p, "TouchGrass");
+                            if (chunk.Biome == BiomeType.Beach) TriggerAdvancement(p, "SandyShores");
+                            
+                            if (p.VisitedBiomes.Count >= 10) TriggerAdvancement(p, "EnterAllBiomes");
                             p.LastKnownBiome = chunk.Biome;
                         }
-                        if (p.CurrentDimension == Dimension.TheEnd) TriggerAdvancement(p, "EnterEnd");
+                        
+                        if (p.CurrentDimension == Dimension.TheEnd) {
+                            TriggerAdvancement(p, "EnterEnd");
+                            p.TimeInEndDimension += dt;
+                            if (p.TimeInEndDimension >= 600f) TriggerAdvancement(p, "WhatAreYouDoing");
+                        } else p.TimeInEndDimension = 0;
+
+                        if (chunk.Biome == BiomeType.LavaPool) {
+                            p.TimeOnLava += dt;
+                            if (p.TimeOnLava >= 2.0f) TriggerAdvancement(p, "IRegretNothing");
+                        } else p.TimeOnLava = 0;
                     }
                 }
 
@@ -270,6 +297,7 @@ public class ServerProgram
                             bot.Health -= 1; // Tick damage while standing in lava
                             if (bot.Health <= 0) {
                                 if (bot.Name == "APEX")
+                                // Advancement: Who Needs Protection? (checked in HandleMobKillAdvancements)
                                 {
                                     // Spawn escape portal at (0,0)
                                     Vector2 portalPos = Vector2.Zero;
@@ -279,16 +307,7 @@ public class ServerProgram
                                 
                                 BulletboxWorld.Raiders.RemoveAt(i); // Remove if dead
                                 lock (ConnectedPlayers) {
-                                    foreach (var p in ConnectedPlayers) p.SendLeaveSignal(bot.Name);
-                                    // Kill triggers
-                                    foreach (var p in ConnectedPlayers) {
-                                        if (bot.Name == "APEX") TriggerAdvancement(p, "DefeatApex");
-                                        if (bot.Name == "Brimstalker") TriggerAdvancement(p, "DefeatBrimstalker");
-                                        if (bot.Name.StartsWith("Raider")) TriggerAdvancement(p, "Kill:Raider");
-                                        if (bot.Name.StartsWith("Flicker")) TriggerAdvancement(p, "Kill:Flicker");
-                                        if (bot.Name.StartsWith("Vortex")) TriggerAdvancement(p, "Kill:Vortex");
-                                        if (bot.Name == "Brimstalker") TriggerAdvancement(p, "Kill:Brimstalker");
-                                    }
+                                    foreach (var p in ConnectedPlayers) HandleMobKillAdvancements(p, bot.Name, null); // No specific killer if lava killed it
                                 }
                             }
                         }
@@ -405,7 +424,13 @@ public class ServerProgram
                     if (!string.IsNullOrEmpty(leavingUser)) {
                         lock (ConnectedPlayers) {
                             LoadedPlayers[leavingUser] = new PlayerSaveData {
-                                Username = newPlayer.Username, Health = newPlayer.Health, MaxHealth = newPlayer.MaxHealth, Hunger = newPlayer.Hunger,
+                                Username = newPlayer.Username, Health = newPlayer.Health, MaxHealth = newPlayer.MaxHealth,
+                                Hunger = newPlayer.Hunger, TotalMobsKilled = newPlayer.TotalMobsKilled,
+                                TotalQuartzObtained = newPlayer.TotalQuartzObtained,
+                                TotalRaidshroomsObtained = newPlayer.TotalRaidshroomsObtained,
+                                TimeInEndDimension = newPlayer.TimeInEndDimension, TimeOnLava = newPlayer.TimeOnLava,
+                                VisitedBiomes = newPlayer.VisitedBiomes, TriggeredAdvancements = newPlayer.TriggeredAdvancements,
+                                KilledOverworld = newPlayer.KilledOverworld,
                                 Position = newPlayer.Position, Rotation = newPlayer.Rotation, IsBlocking = newPlayer.IsBlocking,
                                 CurrentDimension = newPlayer.CurrentDimension, SelectedSlot = newPlayer.SelectedSlot,
                                 AshenTime = newPlayer.AshenTime, BrimstalkerCooldown = newPlayer.BrimstalkerCooldown,
@@ -431,14 +456,13 @@ public class ServerProgram
 
     private static void SpawnBrimstalker(Vector2 pos, Random rand)
     {
-        BulletboxWorld.RaidActive = true;
-            _raidInitialTotalHealth = 1000;
-            var bot = new RaiderBot("Brimstalker", pos + new Vector2(rand.Next(-200, 200), rand.Next(-200, 200)));
-            bot.MaxHealth = 1000; bot.HeldItemID = "none"; // No weapons
-            bot.Health = 1000;
-            BulletboxWorld.Raiders.Add(bot);
-            // Sync immediately
-            BroadcastRaidUpdate(1, 1.0f, null, Dimension.Overworld);
+        BulletboxWorld.RaidActive = true; // Set raid active
+        _raidInitialTotalHealth = 1000;
+        var bot = new RaiderBot("Brimstalker", pos + new Vector2(rand.Next(-200, 200), rand.Next(-200, 200)));
+        bot.MaxHealth = 1000; bot.HeldItemID = "none"; // No weapons
+        bot.Health = 1000;
+        BulletboxWorld.Raiders.Add(bot);
+        BroadcastRaidUpdate(1, 1.0f, null, Dimension.Overworld); // Sync immediately
     }
 
     private static void SpawnRaidersForOutpost(Structure s, Random rand) {
@@ -517,6 +541,7 @@ public class ServerProgram
                 BulletboxWorld.RaidTimer = 9999f;
                 BroadcastRaidUpdate(1, 0, null); // Raid ended, send null for outpost position
                 BroadcastRaidUpdate(0, 9999f);   // Force timer reset on clients
+                BroadcastRaidUpdate(0, 9999f);   // Force timer reset on clients
                 _raidInitialTotalHealth = 0;
 
                 // Populate the chest inventory for the outpost that was just defeated
@@ -525,7 +550,9 @@ public class ServerProgram
                     Vector2 pos = (Vector2)BulletboxWorld.ActiveRaidOutpostPosition.Value;
 
                     lock (ConnectedPlayers) {
-                        foreach (var p in ConnectedPlayers) TriggerAdvancement(p, "DefeatRaid");
+                        foreach (var p in ConnectedPlayers) {
+                            TriggerAdvancement(p, "DefeatRaid");
+                        }
                     }
 
                     Structure? s = BulletboxWorld.Structures.Values.FirstOrDefault(st => (Vector2)st.Position == pos && st.RaidActive);
@@ -1173,7 +1200,13 @@ public class ServerProgram
                 if (string.IsNullOrEmpty(p.Username)) continue;
 
                 LoadedPlayers[p.Username] = new PlayerSaveData {
-                    Username = p.Username, Health = p.Health, MaxHealth = p.MaxHealth, Hunger = p.Hunger,
+                    Username = p.Username, Health = p.Health, MaxHealth = p.MaxHealth,
+                    Hunger = p.Hunger, TotalMobsKilled = p.TotalMobsKilled,
+                    TotalQuartzObtained = p.TotalQuartzObtained,
+                    TotalRaidshroomsObtained = p.TotalRaidshroomsObtained,
+                    TimeInEndDimension = p.TimeInEndDimension, TimeOnLava = p.TimeOnLava,
+                    VisitedBiomes = p.VisitedBiomes, TriggeredAdvancements = p.TriggeredAdvancements,
+                    KilledOverworld = p.KilledOverworld,
                     Position = p.Position, Rotation = p.Rotation, IsBlocking = p.IsBlocking,
                     CurrentDimension = p.CurrentDimension, SelectedSlot = p.SelectedSlot, 
                     AshenTime = p.AshenTime, BrimstalkerCooldown = p.BrimstalkerCooldown,
@@ -1305,7 +1338,13 @@ public class ServerProgram
                 foreach (var pData in saveData.Players) {
                     if (pData == null || string.IsNullOrEmpty(pData.Username)) continue;
                     sanitizeInventory(pData.Inventory);
-                    if (pData.CraftingSlot1.ItemID == null) pData.CraftingSlot1 = new ServerItemStack("none", 0);
+                    if (pData.CraftingSlot1.ItemID == null) pData.CraftingSlot1 = new ServerItemStack("none", 0); // Fix for null ItemID
+                    if (pData.CraftingSlot2.ItemID == null) pData.CraftingSlot2 = new ServerItemStack("none", 0); // Fix for null ItemID
+                    if (pData.VisitedBiomes == null) pData.VisitedBiomes = new HashSet<BiomeType>();
+                    if (pData.TriggeredAdvancements == null) pData.TriggeredAdvancements = new HashSet<string>();
+                    // Sanitize float fields for NaN/Infinity
+                    if (pData.KilledOverworld == null) pData.KilledOverworld = new HashSet<string>();
+                    if (float.IsNaN(pData.TimeInEndDimension) || float.IsInfinity(pData.TimeInEndDimension)) pData.TimeInEndDimension = 0f;
                     if (pData.CraftingSlot2.ItemID == null) pData.CraftingSlot2 = new ServerItemStack("none", 0);
                     // LastKnownBiome is not loaded here as PlayerSaveData definition is not available.
                     LoadedPlayers[pData.Username] = pData;
@@ -1342,5 +1381,35 @@ public class ServerProgram
                 p.Writer.Flush();
             }
         } catch {}
+    }
+
+    public static void HandleMobKillAdvancements(ServerPlayer killer, string mobName, ServerPlayer? attacker)
+    {
+        if (killer == null) return;
+
+        killer.TotalMobsKilled++;
+        if (killer.TotalMobsKilled == 1) TriggerAdvancement(killer, "FirstBlood");
+        if (killer.TotalMobsKilled == 25) TriggerAdvancement(killer, "GettingStronger");
+
+        // Specific mob kill advancements
+        if (mobName == "APEX") {
+            TriggerAdvancement(killer, "DefeatApex");
+            if (attacker != null && !attacker.HasShield()) {
+                TriggerAdvancement(attacker, "WhoNeedsProtection");
+            }
+        }
+        if (mobName == "Brimstalker") TriggerAdvancement(killer, "DefeatBrimstalker");
+        if (mobName.StartsWith("Raider")) TriggerAdvancement(killer, "Kill:Raider");
+        if (mobName.StartsWith("Flicker")) TriggerAdvancement(killer, "Kill:Flicker");
+        if (mobName.StartsWith("Vortex")) TriggerAdvancement(killer, "Kill:Vortex");
+        if (mobName == "Brimstalker") TriggerAdvancement(killer, "Kill:Brimstalker");
+
+        // Master Hunter Tracking (KillAllOverworld)
+        if (mobName.StartsWith("Raider")) killer.KilledOverworld.Add("Raider");
+        if (mobName.StartsWith("Flicker")) killer.KilledOverworld.Add("Flicker");
+        if (mobName.StartsWith("Vortex")) killer.KilledOverworld.Add("Vortex");
+        if (mobName == "Brimstalker") killer.KilledOverworld.Add("Brimstalker");
+
+        if (killer.KilledOverworld.Count >= 4) TriggerAdvancement(killer, "KillAllOverworld");
     }
 }

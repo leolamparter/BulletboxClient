@@ -44,5 +44,5 @@ void main()
     
     // Bloom-ready brightness clamping is handled in post-process
     // but we multiply the base color here
-    finalColor = vec4(texelColor.rgb * totalLight, texelColor.a);
+    finalColor = vec4(texelColor.rgb * totalLight, texelColor.a); // Final output color
 }

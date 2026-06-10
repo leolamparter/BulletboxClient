@@ -37,6 +37,13 @@ public class ServerPlayer
     public float AshenTime = 0f;
     public float BrimstalkerCooldown = 0f;
     public BiomeType LastKnownBiome = (BiomeType)255; // Track last biome for advancement
+    public float TimeInEndDimension = 0f; // For "What Are You Doing?"
+    public float TimeOnLava = 0f; // For "I Regret Nothing"
+    public int TotalMobsKilled = 0; // For "First Blood", "Getting Stronger"
+    public int TotalQuartzObtained = 0; // For "Crystal Clear" and related
+    public int TotalRaidshroomsObtained = 0; // For "I'm Hungry" and "FOOOOOOOOOOD!"
+    public HashSet<BiomeType> VisitedBiomes = new(); // For "Adventurer's Quest" (already in PlayerSaveData, but ensure ServerPlayer tracks it)
+    public HashSet<string> KilledOverworld = new(); // For "Master Hunter"
     public HashSet<string> TriggeredAdvancements = new();
 
     public readonly object WriterLock = new();
@@ -88,6 +95,10 @@ public class ServerPlayer
                         SelectedSlot = savedData.SelectedSlot;
                         AshenTime = savedData.AshenTime;
                         BrimstalkerCooldown = savedData.BrimstalkerCooldown;
+                        TimeInEndDimension = savedData.TimeInEndDimension;
+                        TimeOnLava = savedData.TimeOnLava;
+                        TotalMobsKilled = savedData.TotalMobsKilled;
+                        TotalQuartzObtained = savedData.TotalQuartzObtained;
 
                         // NEW: Sanitize loaded position to prevent NaN propagation
                         if (float.IsNaN(Position.X) || float.IsNaN(Position.Y) || float.IsInfinity(Position.X) || float.IsInfinity(Position.Y))
@@ -99,6 +110,11 @@ public class ServerPlayer
                         Inventory = (ServerItemStack[])savedData.Inventory.Clone();
                         CraftingSlot1 = savedData.CraftingSlot1;
                         CraftingSlot2 = savedData.CraftingSlot2;
+                        VisitedBiomes = savedData.VisitedBiomes != null ? new HashSet<BiomeType>(savedData.VisitedBiomes) : new HashSet<BiomeType>();
+                        KilledOverworld = savedData.KilledOverworld != null ? new HashSet<string>(savedData.KilledOverworld) : new HashSet<string>();
+                        TriggeredAdvancements = savedData.TriggeredAdvancements != null ? new HashSet<string>(savedData.TriggeredAdvancements) : new HashSet<string>();
+                        TotalMobsKilled = savedData.TotalMobsKilled;
+                        TotalRaidshroomsObtained = savedData.TotalRaidshroomsObtained;
 
                         // If the player is loading in with no health, treat it as a respawn
                         if (Health <= 0)
@@ -155,6 +171,12 @@ public class ServerPlayer
                     if (!float.IsNaN(x) && !float.IsNaN(y) && !float.IsInfinity(x) && !float.IsInfinity(y))
                     {
                         Position = new Vector2(x, y); // Update server's authoritative position
+                        // Advancement: Where Am I?
+                        if (Math.Abs(Position.X) > 5000 || Math.Abs(Position.Y) > 5000)
+                        {
+                            ServerProgram.TriggerAdvancement(this, "WhereAmI");
+                        }
+
                     }
                     else
                     { Console.WriteLine($"[Server] WARNING: Client {Username} sent NaN/Infinity position. Ignoring update."); }
@@ -229,6 +251,7 @@ public class ServerPlayer
                             Writer.Write((byte)structure.Type);
                             Writer.Write(structure.Position.X);
                             Writer.Write(structure.Position.Y);
+                            Writer.Write(structure.IsCompleted);
                         }
                     }
                 }
@@ -294,25 +317,22 @@ public class ServerPlayer
                                     if (bot.Name == "APEX")
                                     {
                                         Vector2 portalPos = Vector2.Zero;
-                                        Structure portal = new Structure(portalPos, StructureType.EndPortal, 0, 0, "");
+                                Structure portal = new Structure(portalPos, StructureType.EndPortal, 0, 0, ""); // Spawn escape portal at (0,0)
                                         world.Structures.TryAdd((0, 0), portal);
                                     }
                                     // Notify all clients to remove this bot from their screens
                                     lock (ServerProgram.ConnectedPlayers) {
                                         foreach (var p in ServerProgram.ConnectedPlayers)
                                         {
+                                            ServerProgram.HandleMobKillAdvancements(p, bot.Name, this); // Pass 'this' as the killer
                                             p.SendLeaveSignal(bot.Name);
                                             if (bot.Name == "APEX") ServerProgram.TriggerAdvancement(p, "DefeatApex");
-                                            if (bot.Name == "Brimstalker") ServerProgram.TriggerAdvancement(p, "DefeatBrimstalker");
-                                            if (bot.Name.StartsWith("Raider")) ServerProgram.TriggerAdvancement(p, "Kill:Raider");
-                                            if (bot.Name.StartsWith("Flicker")) ServerProgram.TriggerAdvancement(p, "Kill:Flicker");
-                                            if (bot.Name.StartsWith("Vortex")) ServerProgram.TriggerAdvancement(p, "Kill:Vortex");
-                                            if (bot.Name == "Brimstalker") ServerProgram.TriggerAdvancement(p, "Kill:Brimstalker");
                                         }
                                     }
-                                    if (bot.Name.StartsWith("Raider")) AddItem("raidshroom", Random.Shared.Next(1, 4));
-                                    if (bot.Name.StartsWith("Vortex")) AddItem("pearl", Random.Shared.Next(1, 3));
-                                    if (bot.Name == "Brimstalker") AddItem("brimstone_powder", Random.Shared.Next(3, 6));
+                                    if (bot.Name.StartsWith("Raider")) AddItemToInventory("raidshroom", Random.Shared.Next(1, 4)); // Mob drops are added to inventory
+                                    if (bot.Name.StartsWith("Vortex")) AddItemToInventory("pearl", Random.Shared.Next(1, 3)); // Mob drops are added to inventory
+                                    if (bot.Name == "APEX") AddItemToInventory("brimstone_pearl", 1); // Apex drops a brimstone pearl, added to inventory
+                                    if (bot.Name == "Brimstalker") AddItemToInventory("brimstone_powder", Random.Shared.Next(3, 6)); // Mob drops are added to inventory
                                 }
                             }
                         }
@@ -344,7 +364,7 @@ public class ServerPlayer
                                 amount = parsedAmount;
                             }
                             
-                            AddItem(itemId, amount);
+                            AddItemToInventory(itemId, amount);
                             
                             // Send a private confirmation message back to the player
                             lock (WriterLock)
@@ -404,28 +424,36 @@ public class ServerPlayer
                     int amount = _reader.ReadInt32();
 
                     if (CurrentOpenChest != null && CurrentOpenChest.ChestInventory != null && chestIdx < 18 && invIdx < 25) {
-                        var src = toChest ? Inventory[invIdx] : CurrentOpenChest.ChestInventory[chestIdx];
-                        var dst = toChest ? CurrentOpenChest.ChestInventory[chestIdx] : Inventory[invIdx];
-                        amount = Math.Min(amount, src.Count);
+                        // Validate amount
+                        // Validate amount
+                        if (toChest) // Moving from player inventory to chest
+                        {
+                            ServerItemStack playerItem = Inventory[invIdx];
+                            ServerItemStack chestItem = CurrentOpenChest.ChestInventory[chestIdx];
+                            int actualAmount = Math.Min(amount, playerItem.Count);
 
-                        if (dst.ItemID == "none") {
-                            dst = new ServerItemStack(src.ItemID, amount);
-                            src.Count -= amount;
-                        } else if (dst.ItemID == src.ItemID) {
-                            int canTake = 99 - dst.Count;
-                            int toMove = Math.Min(amount, canTake);
-                            dst.Count += toMove;
-                            src.Count -= toMove;
-                        } else if (amount == src.Count) {
-                            var temp = src;
-                            src = dst;
-                            dst = temp;
+                            if (chestItem.ItemID == "none") {
+                                CurrentOpenChest.ChestInventory[chestIdx] = new ServerItemStack(playerItem.ItemID, actualAmount);
+                                playerItem.Count -= actualAmount;
+                            } else if (chestItem.ItemID == playerItem.ItemID) {
+                                int canTake = 99 - chestItem.Count;
+                                int toMove = Math.Min(actualAmount, canTake);
+                                chestItem.Count += toMove;
+                                playerItem.Count -= toMove;
+                                CurrentOpenChest.ChestInventory[chestIdx] = chestItem;
+                            } else if (actualAmount == playerItem.Count) { // Full swap
+                                CurrentOpenChest.ChestInventory[chestIdx] = playerItem;
+                                playerItem = chestItem;
+                            }
+                            Inventory[invIdx] = playerItem.Count <= 0 ? new ServerItemStack("none", 0) : playerItem;
                         }
-
-                        if (src.Count <= 0) src = new ServerItemStack("none", 0);
-                        if (toChest) { Inventory[invIdx] = src; CurrentOpenChest.ChestInventory[chestIdx] = dst; }
-                        else { CurrentOpenChest.ChestInventory[chestIdx] = src; Inventory[invIdx] = dst; }
-
+                        else // Moving from chest to player inventory
+                        {
+                            ServerItemStack chestItem = CurrentOpenChest.ChestInventory[chestIdx];
+                            int actualAmount = Math.Min(amount, chestItem.Count); // Amount to move
+                            AddItemToInventory(chestItem.ItemID, actualAmount); // Use AddItemToInventory for stacking/empty slot logic
+                            CurrentOpenChest.ChestInventory[chestIdx] = chestItem.Count <= actualAmount ? new ServerItemStack("none", 0) : new ServerItemStack(chestItem.ItemID, chestItem.Count - actualAmount);
+                        }
                         SendFullInventory();
                         SendChestInventory(CurrentOpenChest.ChestInventory);
                     }
@@ -448,6 +476,10 @@ public class ServerPlayer
                         if (CurrentDimension == Dimension.TheEnd)
                         {
                             BroadcastChat("SYSTEM", "Brimstone Pearls do not work in The End.");
+                            // Advancement: Definitely Prepared
+                            if (!HasDiamondOrBrimstoneWeapons()) {
+                                ServerProgram.TriggerAdvancement(this, "DefinitelyPrepared");
+                            }
                             continue; // Prevent pearl usage in The End
                         }
                         // Teleport to The End
@@ -455,7 +487,12 @@ public class ServerPlayer
                         Position = new Vector2(250, 250); // Reset position away from the exit portal (0,0)
                         world.UpdatePosition(Username, Position.X, Position.Y);
                         SendDimensionUpdate();
-                        
+
+                        // Advancement: Definitely Prepared
+                        if (!HasDiamondOrBrimstoneWeapons()) {
+                            ServerProgram.TriggerAdvancement(this, "DefinitelyPrepared");
+                        }
+
                         // Spawn APEX if it doesn't exist in The End (Thread-safe check)
                         lock(world.Raiders)
                         {
@@ -548,6 +585,32 @@ public class ServerPlayer
         }
 
         // Trigger Obtain advancements
+        if (itemId == "rock") ServerProgram.TriggerAdvancement(this, "RockBottom");
+        if (itemId == "copper") ServerProgram.TriggerAdvancement(this, "Oxidized");
+        if (itemId == "iron") ServerProgram.TriggerAdvancement(this, "IronAge");
+        if (itemId.StartsWith("iron_") && !TriggeredAdvancements.Contains("Reinforced")) {
+            ServerProgram.TriggerAdvancement(this, "Reinforced");
+        }
+        if (itemId == "quartz") {
+            TotalQuartzObtained += amount;
+            ServerProgram.TriggerAdvancement(this, "CrystalClear");
+            if (TotalQuartzObtained >= 20) ServerProgram.TriggerAdvancement(this, "EnoughCrystalsAlready");
+            if (TotalQuartzObtained >= 99) ServerProgram.TriggerAdvancement(this, "ThatsEnoughCrystalsNo");
+            if (TotalQuartzObtained >= 198) ServerProgram.TriggerAdvancement(this, "StopItWithTheCrystals");
+        }
+        if (itemId == "raidshroom") {
+            TotalRaidshroomsObtained += amount;
+            if (TotalRaidshroomsObtained >= 20) ServerProgram.TriggerAdvancement(this, "ImHungry");
+            if (TotalRaidshroomsObtained >= 99) ServerProgram.TriggerAdvancement(this, "FOOOOOOOOOOD");
+        }
+        if (itemId == "brimstone_kanabo") ServerProgram.TriggerAdvancement(this, "BonkBonk");
+
+        // Existing advancements
+        // if (itemId == "diamond") ServerProgram.TriggerAdvancement(this, "ObtainDiamonds"); // Already handled by ServerProgram
+        // if (itemId == "diamond_sword") ServerProgram.TriggerAdvancement(this, "ObtainDiamondSword"); // Already handled by ServerProgram
+        // if (itemId == "stone_kanabo") ServerProgram.TriggerAdvancement(this, "ObtainKanabo"); // Already handled by ServerProgram
+        // if (itemId == "brimstone_pearl") ServerProgram.TriggerAdvancement(this, "ObtainBrimstonePearl"); // Already handled by ServerProgram
+
         if (itemId == "diamond") ServerProgram.TriggerAdvancement(this, "ObtainDiamonds");
         if (itemId == "diamond_sword") ServerProgram.TriggerAdvancement(this, "ObtainDiamondSword");
         if (itemId == "stone_kanabo") ServerProgram.TriggerAdvancement(this, "ObtainKanabo");
@@ -603,6 +666,112 @@ public class ServerPlayer
             return new ServerItemStack(outputId!, 1);
         }
         return new ServerItemStack("none", 0);
+    }
+
+    // This method is now ONLY for triggering advancements related to obtaining items.
+    // It no longer modifies the inventory or sends inventory updates.
+    private void TriggerObtainAdvancements(string itemId, int amount)
+    {
+        if (itemId == "rock") ServerProgram.TriggerAdvancement(this, "RockBottom");
+        if (itemId == "copper") ServerProgram.TriggerAdvancement(this, "Oxidized");
+        if (itemId == "iron") ServerProgram.TriggerAdvancement(this, "IronAge");
+        if (itemId.StartsWith("iron_") && !TriggeredAdvancements.Contains("Reinforced")) {
+            ServerProgram.TriggerAdvancement(this, "Reinforced");
+        }
+        if (itemId == "quartz") {
+            TotalQuartzObtained += amount;
+            ServerProgram.TriggerAdvancement(this, "CrystalClear");
+            if (TotalQuartzObtained >= 20) ServerProgram.TriggerAdvancement(this, "EnoughCrystalsAlready");
+            if (TotalQuartzObtained >= 99) ServerProgram.TriggerAdvancement(this, "ThatsEnoughCrystalsNo");
+            if (TotalQuartzObtained >= 198) ServerProgram.TriggerAdvancement(this, "StopItWithTheCrystals");
+        }
+        if (itemId == "raidshroom") {
+            TotalRaidshroomsObtained += amount;
+            if (TotalRaidshroomsObtained >= 20) ServerProgram.TriggerAdvancement(this, "ImHungry");
+            if (TotalRaidshroomsObtained >= 99) ServerProgram.TriggerAdvancement(this, "FOOOOOOOOOOD");
+        }
+        if (itemId == "brimstone_kanabo") ServerProgram.TriggerAdvancement(this, "BonkBonk");
+
+        if (itemId == "diamond") ServerProgram.TriggerAdvancement(this, "ObtainDiamonds");
+        if (itemId == "diamond_sword") ServerProgram.TriggerAdvancement(this, "ObtainDiamondSword");
+        if (itemId == "stone_kanabo") ServerProgram.TriggerAdvancement(this, "ObtainKanabo");
+        if (itemId == "brimstone_pearl") ServerProgram.TriggerAdvancement(this, "ObtainBrimstonePearl");
+        if (itemId.StartsWith("brimstone_") && itemId != "brimstone_powder" && itemId != "brimstone_pearl") 
+            ServerProgram.TriggerAdvancement(this, "ObtainBrimstone");
+        
+        // Check for ObtainAllDiamond (Set of Sword, Axe, Scythe, Spear)
+        bool hasS = Inventory.Any(i => i.ItemID == "diamond_sword");
+        bool hasA = Inventory.Any(i => i.ItemID == "diamond_axe");
+        bool hasSc = Inventory.Any(i => i.ItemID == "diamond_scythe");
+        bool hasSp = Inventory.Any(i => i.ItemID == "diamond_spear");
+        if (hasS && hasA && hasSc && hasSp) ServerProgram.TriggerAdvancement(this, "ObtainAllDiamond");
+
+        // Check for ObtainAllBrimstone
+        bool hasBS = Inventory.Any(i => i.ItemID == "brimstone_sword");
+        bool hasBA = Inventory.Any(i => i.ItemID == "brimstone_axe");
+        bool hasBSc = Inventory.Any(i => i.ItemID == "brimstone_scythe");
+        bool hasBSp = Inventory.Any(i => i.ItemID == "brimstone_spear");
+        bool hasBK = Inventory.Any(i => i.ItemID == "brimstone_kanabo");
+        if (hasBS && hasBA && hasBSc && hasBSp && hasBK) ServerProgram.TriggerAdvancement(this, "ObtainAllBrimstone");
+    }
+
+    // This method adds items to the inventory, stacking and finding empty slots.
+    // It also triggers advancements and sends inventory updates.
+    public void AddItemToInventory(string itemId, int amount)
+    {
+        for (int i = 0; i < Inventory.Length; i++) {
+            if (Inventory[i].ItemID == itemId && Inventory[i].Count < 99) {
+                int space = 99 - Inventory[i].Count;
+                int toAdd = Math.Min(amount, space);
+                Inventory[i].Count += toAdd;
+                amount -= toAdd;
+                TriggerObtainAdvancements(itemId, toAdd);
+            }
+            if (amount <= 0) break;
+        }
+        if (amount > 0) {
+            for (int i = 0; i < Inventory.Length; i++) {
+                if (Inventory[i].ItemID == "none" || Inventory[i].Count <= 0) {
+                    Inventory[i].ItemID = itemId;
+                    Inventory[i].Count = Math.Min(amount, 99);
+                    amount -= Inventory[i].Count;
+                    TriggerObtainAdvancements(itemId, Inventory[i].Count);
+                }
+                if (amount <= 0) break;
+            }
+        }
+        SendFullInventory();
+    }
+
+    public bool HasShield()
+    {
+        foreach (var item in Inventory)
+        {
+            if (item.ItemID == "shield") return true;
+        }
+        return false;
+    }
+
+    public bool HasDiamondOrBrimstoneWeapons()
+    {
+        foreach (var item in Inventory)
+        {
+            if (item.ItemID.StartsWith("diamond_") || (item.ItemID.StartsWith("brimstone_") && item.ItemID != "brimstone_powder" && item.ItemID != "brimstone_pearl"))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public bool HasIronOrDiamondWeapons()
+    {
+        foreach (var item in Inventory)
+        {
+            if (item.ItemID.StartsWith("iron_") || item.ItemID.StartsWith("diamond_"))
+                return true;
+        }
+        return false;
     }
 
 
@@ -689,6 +858,7 @@ public class ServerPlayer
         if (IsBlocking) 
         {
             amount = (int)(amount * 0.10f); // 90% reduction
+            // Advancement: Thanks, But No Thanks (handled in ServerProgram when mob takes damage from its own bomb)
             lock (WriterLock)
             {
                 Writer.Write((byte)14); // Packet ID 14: Shield Block Sound Trigger
@@ -696,6 +866,10 @@ public class ServerPlayer
             }
         }
         Health -= amount;
+        // Advancement: Survivor
+        if (Health == 1) {
+            ServerProgram.TriggerAdvancement(this, "Survivor");
+        }
         if (Health < 0) Health = 0;
         SyncHealth();
     }

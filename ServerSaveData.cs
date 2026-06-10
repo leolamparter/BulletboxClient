@@ -35,6 +35,14 @@ public class PlayerSaveData
     public ServerItemStack[] Inventory { get; set; } = new ServerItemStack[25];
     public ServerItemStack CraftingSlot1 { get; set; }
     public ServerItemStack CraftingSlot2 { get; set; }
+    public float TimeInEndDimension { get; set; }
+    public float TimeOnLava { get; set; }
+    public int TotalMobsKilled { get; set; }
+    public int TotalQuartzObtained { get; set; }
+    public int TotalRaidshroomsObtained { get; set; }
+    public HashSet<BiomeType> VisitedBiomes { get; set; } = new();
+    public HashSet<string> KilledOverworld { get; set; } = new();
+    public HashSet<string> TriggeredAdvancements { get; set; } = new();
 }
 
 public class RaiderSaveData
