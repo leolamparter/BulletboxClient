@@ -112,11 +112,12 @@ public class Connection
                     int maxHp = _reader.ReadInt32();
 
                     // Safety check: Don't process if the game state changed
-                    if (Program.PlayingState != null)
+                    var playingState = Program.PlayingState;
+                    if (playingState != null)
                     {
-                        lock (Program.PlayingState.OthersLock)
+                        lock (playingState.OthersLock)
                         {
-                            if (Program.PlayingState.Others.TryGetValue(name, out var other))
+                            if (playingState.Others.TryGetValue(name, out var other))
                             {
                                 other.Position = new Vector2(x, y);
                                 other.Rotation = rot;
@@ -126,7 +127,7 @@ public class Connection
                                 other.Health = hp;
                                 other.MaxHealth = maxHp;
                             }
-                            else if (name != Program.CurrentUser.Username)
+                            else if (Program.CurrentUser != null && name != Program.CurrentUser.Username)
                             {
                                 Console.WriteLine($"Player {name} entered the vision range.");
                                 Player newRemotePlayer = new Player(name, new Vector2(x, y));
@@ -137,7 +138,7 @@ public class Connection
                                 newRemotePlayer.IsBlocking = isBlocking;
                                 newRemotePlayer.Health = hp;
                                 newRemotePlayer.MaxHealth = maxHp;
-                                Program.PlayingState.Others[name] = newRemotePlayer;
+                                playingState.Others[name] = newRemotePlayer;
                             }
                         }
                     }
@@ -291,6 +292,9 @@ public class Connection
                 else if (packetId == 21) // Dimension Update
                 {
                     byte dim = _reader.ReadByte();
+                    float newX = _reader.ReadSingle();
+                    float newY = _reader.ReadSingle();
+
                     if (CurrentDimension == Dimension.TheEnd && (Dimension)dim == Dimension.Overworld) Program.IsEnding = false; // Reset cinematic state if returning from The End
                     CurrentDimension = (Dimension)dim;
                     lock (ChunkBiomesLock)
@@ -305,8 +309,36 @@ public class Connection
                     if (Program.PlayingState != null)
                     {
                         lock (Program.PlayingState.OthersLock) { Program.PlayingState.Others.Clear(); }
+                        Program.PlayingState.LocalPlayer.Position = new Vector2(newX, newY);
                         Program.PlayingState.RaidActive = false;
                         Program.PlayingState.TriggerCacheClear();
+                    }
+                }
+                else if (packetId == 25) // Advancement Trigger
+                {
+                    string advancementId = _reader.ReadString();
+                    Console.WriteLine($"[Network] Advancement Progress: {advancementId}");
+
+                    if (Program.CurrentUser != null)
+                    {
+                        Program.PlayingState?.TriggerAdvancementPopup(advancementId);
+
+                        dynamic user = Program.CurrentUser;
+                        if (advancementId.StartsWith("EnterBiome:"))
+                        {
+                            if (byte.TryParse(advancementId.Split(':')[1], out byte bId))
+                                if (!user.VisitedBiomes.Contains(bId)) user.VisitedBiomes.Add(bId);
+                        }
+                        else if (advancementId.StartsWith("Kill:"))
+                        {
+                            string mob = advancementId.Split(':')[1];
+                            if (!user.KilledOverworld.Contains(mob)) user.KilledOverworld.Add(mob);
+                        }
+                        else
+                        {
+                            user.Advancements[advancementId] = true;
+                        }
+                        SaveManager.Save(Program.CurrentUser);
                     }
                 }
             }

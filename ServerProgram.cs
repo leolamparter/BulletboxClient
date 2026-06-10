@@ -22,7 +22,8 @@ public class ServerProgram
     private static float _autoSaveTimer = 0f;
 
     private const string SinglePlayerSavePath = "singleplayer_save.json";
-    public static Dictionary<string, PlayerSaveData> LoadedPlayers = new(); // Holds player data by username after loading
+    private static readonly object _connectedPlayersLock = new object(); // Lock for ConnectedPlayers
+    public static readonly Dictionary<string, PlayerSaveData> LoadedPlayers = new(); // Holds player data by username after loading
 
     public static async Task RunServerAsync()
     {
@@ -107,7 +108,7 @@ public class ServerProgram
 
                         bool triggered = bomb.Timer <= 0;
                         if (!triggered) {
-                            lock(ConnectedPlayers) {
+                            lock(_connectedPlayersLock) {
                                 foreach(var p in ConnectedPlayers) {
                                     Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
                                     if (Vector2.Distance(pPos, bomb.Position) < 25f) { triggered = true; break; }
@@ -139,10 +140,23 @@ public class ServerProgram
                 }
 
                 // Update Server-side Player Physics (e.g., knockback decay)
-                lock(ConnectedPlayers) {
+                lock(ConnectedPlayers) { // Use ConnectedPlayers directly as it's the list being iterated
                     foreach(var p in ConnectedPlayers) {
+                        // NEW: Sanitize velocity before applying
+                        if (float.IsNaN(p.Velocity.X) || float.IsNaN(p.Velocity.Y) || float.IsInfinity(p.Velocity.X) || float.IsInfinity(p.Velocity.Y))
+                        {
+                            Console.WriteLine($"[Server] WARNING: Player {p.Username}'s velocity contained NaN/Infinity. Resetting.");
+                            p.Velocity = Vector2.Zero;
+                        }
                         p.Position += p.Velocity * dt;
                         p.Velocity = Vector2.Lerp(p.Velocity, Vector2.Zero, dt * 6.5f); // Decay knockback
+                        // NEW: Sanitize position after applying velocity
+                        if (float.IsNaN(p.Position.X) || float.IsNaN(p.Position.Y) || float.IsInfinity(p.Position.X) || float.IsInfinity(p.Position.Y))
+                        {
+                            Console.WriteLine($"[Server] WARNING: Player {p.Username}'s position became NaN/Infinity. Resetting to default spawn.");
+                            p.Position = new Vector2(400, 300); // Reset to a known good position
+                            p.Velocity = Vector2.Zero; // Also reset velocity
+                        }
                     }
                 }
                 // Update Server-side Gust Logic (NEW)
@@ -174,25 +188,35 @@ public class ServerProgram
                 }
 
                 // Brimstalker Spawning Logic
-                lock(ConnectedPlayers) {
+                lock(ConnectedPlayers) { // Use ConnectedPlayers directly
                     foreach(var p in ConnectedPlayers) {
                         Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
                         var chunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(pPos.X / 16), (int)MathF.Floor(pPos.Y / 16), p.CurrentDimension);
                         
                         if (chunk.Biome == BiomeType.AshenWastelands) {
                             p.AshenTime += dt;
+                            TriggerAdvancement(p, "EnterAshen");
                             // Spawns after 1 minute in the biome
                             if (p.AshenTime > 60f && p.BrimstalkerCooldown <= 0f && !BulletboxWorld.RaidActive) {
                                 SpawnBrimstalker(pPos, rand);
+                                TriggerAdvancement(p, "SpawnBrimstalker");
                                 p.BrimstalkerCooldown = 300f; // 5 minute cooldown
                             }
                         }
                         if (p.BrimstalkerCooldown > 0) p.BrimstalkerCooldown -= dt;
+
+                        // Dimension and Biome Discovery
+                        if (p.LastKnownBiome != chunk.Biome)
+                        {
+                            TriggerAdvancement(p, "EnterBiome:" + (byte)chunk.Biome);
+                            p.LastKnownBiome = chunk.Biome;
+                        }
+                        if (p.CurrentDimension == Dimension.TheEnd) TriggerAdvancement(p, "EnterEnd");
                     }
                 }
 
                 // Lava Pool Damage Logic for ALL entities
-                lock(ConnectedPlayers) {
+                lock(ConnectedPlayers) { // Use ConnectedPlayers directly
                     foreach(var p in ConnectedPlayers) {
                         Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
                         var chunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(pPos.X / 16), (int)MathF.Floor(pPos.Y / 16), p.CurrentDimension);
@@ -256,6 +280,15 @@ public class ServerProgram
                                 BulletboxWorld.Raiders.RemoveAt(i); // Remove if dead
                                 lock (ConnectedPlayers) {
                                     foreach (var p in ConnectedPlayers) p.SendLeaveSignal(bot.Name);
+                                    // Kill triggers
+                                    foreach (var p in ConnectedPlayers) {
+                                        if (bot.Name == "APEX") TriggerAdvancement(p, "DefeatApex");
+                                        if (bot.Name == "Brimstalker") TriggerAdvancement(p, "DefeatBrimstalker");
+                                        if (bot.Name.StartsWith("Raider")) TriggerAdvancement(p, "Kill:Raider");
+                                        if (bot.Name.StartsWith("Flicker")) TriggerAdvancement(p, "Kill:Flicker");
+                                        if (bot.Name.StartsWith("Vortex")) TriggerAdvancement(p, "Kill:Vortex");
+                                        if (bot.Name == "Brimstalker") TriggerAdvancement(p, "Kill:Brimstalker");
+                                    }
                                 }
                             }
                         }
@@ -266,7 +299,7 @@ public class ServerProgram
                 _playerRegenTimer += dt;
                 if (_playerRegenTimer >= 1.0f) {
                     _playerRegenTimer -= 1.0f;
-                    lock(ConnectedPlayers) {
+                    lock(ConnectedPlayers) { // Use ConnectedPlayers directly
                         foreach(var p in ConnectedPlayers) {
                             if (p.Health < p.MaxHealth && p.Hunger >= 5) {
                                 p.Health = Math.Min(p.MaxHealth, p.Health + 5);
@@ -283,13 +316,15 @@ public class ServerProgram
                     bool anyPlayerNearOutpost = false;
                     Structure? triggeredStructure = null;
 
-                    foreach (var kvp in BulletboxWorld.Structures)
+                    foreach (var kvp in BulletboxWorld.Structures.ToList()) // Use ToList to avoid modification during iteration
                     {
                         var s = kvp.Value; // The current structure (raid outpost)
 
+                        if (s.Type != StructureType.RaidOutpost) continue;
+
                         foreach (var p in ConnectedPlayers)
                         {
-                            Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
+                            Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero); // Ensure player is in the world
                             if (Vector2.Distance(pPos, s.Position) < triggerDist)
                             {
                                 if (!s.IsCompleted) {
@@ -314,16 +349,16 @@ public class ServerProgram
                                 SpawnRaidersForOutpost(triggeredStructure, rand);
                                 BulletboxWorld.ActiveRaidOutpostPosition = triggeredStructure.Position; // Capture the outpost position when the raid *starts*
                                 BulletboxWorld.RaidTimer = 0;
-                                BroadcastRaidUpdate(1, 1.0f, BulletboxWorld.ActiveRaidOutpostPosition);
-                                BroadcastRaidUpdate(0, 0); // Sync timer to 0 immediately
+                                BroadcastRaidUpdate(1, 1.0f, BulletboxWorld.ActiveRaidOutpostPosition, Dimension.Overworld);
+                                BroadcastRaidUpdate(0, 0, null, Dimension.Overworld); // Sync timer to 0 immediately
                             }
-                            else BroadcastRaidUpdate(0, BulletboxWorld.RaidTimer);
+                            else BroadcastRaidUpdate(0, BulletboxWorld.RaidTimer, null, Dimension.Overworld);
                         }
                         // If no player is near an outpost, and the timer was counting down, reset it
                         else if (BulletboxWorld.RaidTimer != 9999f)
                         {
                             BulletboxWorld.RaidTimer = 9999f;
-                            BroadcastRaidUpdate(0, 9999f);
+                            BroadcastRaidUpdate(0, 9999f, null, Dimension.Overworld);
                         }
                     }
                     else
@@ -331,30 +366,82 @@ public class ServerProgram
                         // Handle active global raid state
                         float currentTotalRaiderHp = 0;
                         var raiders = BulletboxWorld.Raiders.ToList();
-
+                    
+                    // NEW: Separate APEX health from general raid pool to prevent influence from other mobs
+                    var apex = raiders.FirstOrDefault(r => r.Name == "APEX");
+                    if (apex != null)
+                    {
+                        currentTotalRaiderHp = apex.Health;
+                        // APEX fight is not tied to an outpost position for the UI boundary
+                        BroadcastRaidUpdate(1, _raidInitialTotalHealth > 0 ? currentTotalRaiderHp / _raidInitialTotalHealth : 0, null, Dimension.TheEnd);
+                    }
+                    else
+                    {
                         foreach (var bot in raiders) { currentTotalRaiderHp += bot.Health; }
-
-                        // Pass the fixed active outpost's position during an active raid
-                        BroadcastRaidUpdate(1, _raidInitialTotalHealth > 0 ? currentTotalRaiderHp / _raidInitialTotalHealth : 0, BulletboxWorld.ActiveRaidOutpostPosition);
+                        BroadcastRaidUpdate(1, _raidInitialTotalHealth > 0 ? currentTotalRaiderHp / _raidInitialTotalHealth : 0, BulletboxWorld.ActiveRaidOutpostPosition, Dimension.Overworld);
+                    }
                     }
                 }
             }
         });
+        
+        // Client connection acceptance loop
+        try {
+            while (IsRunning) {
+                if (!listener.Pending()) { await Task.Delay(100); continue; }
+                TcpClient clientSocket = await listener.AcceptTcpClientAsync();
+                
+                ServerPlayer newPlayer = new ServerPlayer(clientSocket);
+                lock(_connectedPlayersLock) { ConnectedPlayers.Add(newPlayer); }
+                
+                _ = Task.Run(async () => {
+                    await newPlayer.Listen(BulletboxWorld);
+                    
+                    string leavingUser = newPlayer.Username;
+                    
+                    // This logic was already in place, but ensure it's within the correct lock
+                    // NEW: Perform a final authoritative sync to the persistent cache before the player is removed.
+                    // This ensures that 100% of progress is captured even if the server saves immediately after disconnect.
+                    if (!string.IsNullOrEmpty(leavingUser)) {
+                        lock (ConnectedPlayers) {
+                            LoadedPlayers[leavingUser] = new PlayerSaveData {
+                                Username = newPlayer.Username, Health = newPlayer.Health, MaxHealth = newPlayer.MaxHealth, Hunger = newPlayer.Hunger,
+                                Position = newPlayer.Position, Rotation = newPlayer.Rotation, IsBlocking = newPlayer.IsBlocking,
+                                CurrentDimension = newPlayer.CurrentDimension, SelectedSlot = newPlayer.SelectedSlot,
+                                AshenTime = newPlayer.AshenTime, BrimstalkerCooldown = newPlayer.BrimstalkerCooldown,
+                                Inventory = (ServerItemStack[])newPlayer.Inventory.Clone(),
+                                CraftingSlot1 = newPlayer.CraftingSlot1, CraftingSlot2 = newPlayer.CraftingSlot2
+                            };
+                        }
+                    }
 
-        void SpawnBrimstalker(Vector2 pos, Random rand)
-        {
-            BulletboxWorld.RaidActive = true;
+                    lock(_connectedPlayersLock) 
+                    { 
+                        ConnectedPlayers.Remove(newPlayer);
+                        // Notify all remaining clients that this player is gone
+                        foreach(var p in ConnectedPlayers) p.SendLeaveSignal(leavingUser); // Ensure this is thread-safe
+                    }
+                    Console.WriteLine($"[Server] Player {leavingUser} disconnected.");
+                });
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"[Server] Error: {ex.Message}"); }
+        finally { listener.Stop(); IsRunning = false; }
+    }
+
+    private static void SpawnBrimstalker(Vector2 pos, Random rand)
+    {
+        BulletboxWorld.RaidActive = true;
             _raidInitialTotalHealth = 1000;
             var bot = new RaiderBot("Brimstalker", pos + new Vector2(rand.Next(-200, 200), rand.Next(-200, 200)));
             bot.MaxHealth = 1000; bot.HeldItemID = "none"; // No weapons
             bot.Health = 1000;
             BulletboxWorld.Raiders.Add(bot);
             // Sync immediately
-            BroadcastRaidUpdate(1, 1.0f, null);
-        }
+            BroadcastRaidUpdate(1, 1.0f, null, Dimension.Overworld);
+    }
 
-        void SpawnRaidersForOutpost(Structure s, Random rand)
-        {
+    private static void SpawnRaidersForOutpost(Structure s, Random rand) {
             // Set the raid active flag on the structure itself (server-side structure object)
             s.RaidActive = true;
             // Store the active outpost position in the world for consistent broadcasting
@@ -415,7 +502,8 @@ public class ServerProgram
             }
         }
 
-        void UpdateRaiderAI(float dt) {
+    private static void UpdateRaiderAI(float dt) {
+        // This method is called from RunServerAsync, so it needs to be static
             Random rand = new Random();
             float time = (float)(DateTime.Now.Ticks / 10000000.0);
             
@@ -435,28 +523,16 @@ public class ServerProgram
                 if (BulletboxWorld.ActiveRaidOutpostPosition.HasValue)
                 {
                     Vector2 pos = (Vector2)BulletboxWorld.ActiveRaidOutpostPosition.Value;
+
+                    lock (ConnectedPlayers) {
+                        foreach (var p in ConnectedPlayers) TriggerAdvancement(p, "DefeatRaid");
+                    }
+
                     Structure? s = BulletboxWorld.Structures.Values.FirstOrDefault(st => (Vector2)st.Position == pos && st.RaidActive);
                     if (s != null)
                     {
                         s.RaidActive = false;
-                        s.IsCompleted = true; // Mark as completed for chest access after victory
-                        s.ChestInventory = new ServerItemStack[18];
-                    for (int j = 0; j < 18; j++) s.ChestInventory[j] = new ServerItemStack("none", 0);
-                    // Updated loot pool: minerals, shields, raidshrooms, and wooden/stone gear
-                    string[] pool = { 
-                        "stick", "rock", "copper", "iron", "diamond", "quartz", 
-                        "shield", "raidshroom", 
-                        "wooden_sword", "wooden_axe", "wooden_scythe", "wooden_spear",
-                        "stone_sword", "stone_axe", "stone_scythe", "stone_spear" 
-                    };
-                        int lootCount = rand.Next(4, 9);
-                        for (int j = 0; j < lootCount; j++) {
-                            int slot = rand.Next(18);
-                        string item = pool[rand.Next(pool.Length)];
-                        // Allow minerals and consumables to stack in the chest
-                        bool isStackable = item == "raidshroom" || item == "stick" || item == "rock" || item == "copper" || item == "iron" || item == "diamond" || item == "quartz";
-                        s.ChestInventory[slot] = new ServerItemStack(item, isStackable ? rand.Next(1, 4) : 1);
-                        }
+                        PopulateRaidLoot(s, rand);
                     }
                 }
                 BulletboxWorld.ActiveRaidOutpostPosition = null; // Clear the active outpost
@@ -484,6 +560,12 @@ public class ServerProgram
                 float visionRange = 45 * 16;
                 if (target != null && minDist < visionRange + 32) {
                     bot.WanderTarget = null;
+
+                    // APEX Boss AI Logic
+                    if (bot.Name == "APEX")
+                    {
+                        UpdateApexAI(bot, target, dt, rand, minDist);
+                    }
                     Vector2 targetPos = BulletboxWorld.PlayerLocations[target.Username];
 
                     // APEX Evolutions based on Health
@@ -494,7 +576,7 @@ public class ServerProgram
                     }
 
                     // Unique strafe and target offset per raider to prevent marching in sync
-                    int hash = bot.Name.GetHashCode();
+                    int hash = bot.Name.GetHashCode(); // Re-use hash for consistency
                     Vector2 targetOffset = new Vector2(MathF.Cos(hash) * 35f, MathF.Sin(hash) * 35f);
                     Vector2 dir = Vector2.Normalize((targetPos + targetOffset) - bot.Position);
                     
@@ -508,7 +590,7 @@ public class ServerProgram
                             float dist = rand.Next(150, 300);
                             bot.Position += new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
                             bot.PreviousHealth = bot.Health;
-                            bot.ChargePhase = 0; // Reset charge if teleporting
+                            bot.ChargePhase = 0; // Reset charge if teleporting (Apex specific)
                             bot.ChargeTimer = 0;
                         }
                     }
@@ -516,7 +598,7 @@ public class ServerProgram
                     // AI Change: Brimstalker never runs away, but Raiders and Flickers can
                     if (bot.Name != "Brimstalker") {
                         if (bot.Health < 30 && bot.FleeTimer <= 0 && rand.Next(100) < 1) bot.FleeTimer = 8.0f;
-                    }
+                    } // End of Brimstalker check
 
                     if (bot.FleeTimer > 0 && bot.Name != "APEX") { bot.FleeTimer -= dt; dir = -dir; }
 
@@ -527,11 +609,32 @@ public class ServerProgram
 
                     bot.Rotation = (float)(Math.Atan2(dir.Y, dir.X) * (180.0 / Math.PI));
 
-                    float apexHpPct = bot.Name == "APEX" ? bot.Health / (float)bot.MaxHealth : 1.0f;
+                    // --- LAVA AVOIDANCE STEERING ---
+                    // Probe 3 points ahead (center, left-diag, right-diag) to steer away from lava
+                    Vector2 lavaAvoidance = Vector2.Zero;
+                    float[] probeAngles = { 0, -35, 35 };
+                    foreach (float angleOffset in probeAngles) {
+                        float rad = (bot.Rotation + angleOffset) * (MathF.PI / 180f);
+                        Vector2 probePos = bot.Position + new Vector2(MathF.Cos(rad), MathF.Sin(rad)) * 48f;
+                        var probeChunk = BulletboxWorld.GetOrGenerateChunk((int)MathF.Floor(probePos.X / 16), (int)MathF.Floor(probePos.Y / 16), bot.Dimension);
+                        if (probeChunk.Biome == BiomeType.LavaPool) lavaAvoidance += Vector2.Normalize(bot.Position - probePos);
+                    }
+                    if (lavaAvoidance != Vector2.Zero) {
+                        dir = Vector2.Normalize(dir + lavaAvoidance * 2.5f);
+                        bot.Rotation = (float)(Math.Atan2(dir.Y, dir.X) * (180.0 / Math.PI));
+                    }
 
+                    float apexHpPct = bot.Name == "APEX" ? bot.Health / (float)bot.MaxHealth : 1.0f;
+                    
                     if (bot.Name == "Brimstalker" || (bot.Name.StartsWith("Flicker") && minDist < 250f) || (bot.Name == "APEX" && apexHpPct <= 0.4f)) {
                         // Charge Attack State Machine (Shared by Brimstalker and Aggroed Flicker)
                         if (bot.ChargePhase == 0) {
+                            // Ensure the Brimstalker stays mobile and circles the player during charge cooldowns
+                            if (bot.Name == "Brimstalker") {
+                                float idealDist = 450f;
+                                float distFactor = (minDist - idealDist) * 0.5f; // Maintain engagement distance
+                                bot.Position += (dir * distFactor + sideStepDir * strafeAmount) * dt;
+                            }
                             bot.ChargeCooldown -= dt;
                             if (bot.ChargeCooldown <= 0 || (bot.Name.StartsWith("Flicker") && minDist < 150f)) {
                                 bot.ChargePhase = 1;
@@ -574,8 +677,8 @@ public class ServerProgram
                             continue; // Skip normal movement/bomb logic during charge lunge
                         }
                     }
-                    else if (bot.Name.StartsWith("Vortex") || (bot.Name == "APEX" && apexHpPct <= 0.6f && apexHpPct > 0.4f)) // NEW Vortex AI
-                    {
+                    else if (bot.Name.StartsWith("Vortex")) // NEW Vortex AI
+                    { // This block is now mostly handled by UpdateApexAI for APEX
                         float desiredDistance = 300f; // 300 units away
                         float vortexMoveSpeed = 220f; 
                         
@@ -601,10 +704,14 @@ public class ServerProgram
                             Vector2 gustDir = directDir; // Shoot directly at target
                             float gustSpeed = 1500f;
                             lock(BulletboxWorld.ActiveGusts) { BulletboxWorld.ActiveGusts.Add(new ServerGust(bot.Position + new Vector2(32,32), gustDir * gustSpeed, bot.Name, 5f, 800f)); } // 5 damage, 800 knockback
-                            BroadcastGust(bot.Position + new Vector2(32,32), gustDir * gustSpeed);
+                            BroadcastGust(bot.Position + new Vector2(32,32), gustDir * gustSpeed, bot.Dimension);
                         }
                     }
-                    else // Generic Melee Raider Positioning
+                    else if (bot.Name == "Brimstalker")
+                    {
+                        // Handled in the charge block above for mobility consistency
+                    }
+                    else if (bot.Name != "APEX" && !bot.Name.StartsWith("Vortex")) // Generic Melee Raider Positioning (Only for non-Apex raiders)
                     {
                         float attackRange = 96f; 
                         if (ServerWeaponStats.Library.TryGetValue(bot.HeldItemID, out var stats)) attackRange = stats.Range * 0.65f;
@@ -612,7 +719,7 @@ public class ServerProgram
                         float stopDist = attackRange * 0.85f;
                         float moveSpeed = (minDist < stopDist) ? 60f : 260f;
                         bot.Position += (dir * moveSpeed + sideStepDir * strafeAmount) * dt;
-                    }
+                    } // End of Generic Melee Raider Positioning
 
                     // Enforce raid boundary for raiders
                     if (BulletboxWorld.ActiveRaidOutpostPosition.HasValue)
@@ -626,7 +733,7 @@ public class ServerProgram
                         }
                     }
 
-                    if (!bot.Name.StartsWith("Vortex") && !(bot.Name == "APEX" && apexHpPct <= 0.6f && apexHpPct > 0.4f))
+                    if (!bot.Name.StartsWith("Vortex") && bot.Name != "APEX") // Only non-Apex, non-Vortex raiders use this for attack logic
                     {
                         bot.AttackTimer += dt;
                         if (bot.Name == "Brimstalker" || (bot.Name == "APEX" && apexHpPct <= 0.4f)) {
@@ -641,7 +748,7 @@ public class ServerProgram
                                     b.TargetPlayer = target.Username;
                                     BulletboxWorld.ActiveBombs.Add(b);
                                 }
-                                BroadcastBomb(bot.Position, bombDir * bombSpeed);
+                                BroadcastBomb(bot.Position, bombDir * bombSpeed, bot.Dimension);
                             }
                         }
                         else {
@@ -670,20 +777,25 @@ public class ServerProgram
                     }
                 }
 
+                // Update PreviousHealth for Apex for damage-based triggers
+                if (bot.Name == "APEX") {
+                    bot.PreviousHealth = bot.Health;
+                }
+
                 // Anti-overlap: Push raiders away from each other and players
                 foreach (var other in botsToUpdate) {
                     if (bot == other) continue;
                     float d = Vector2.Distance(bot.Position, other.Position);
-                    float overlapRadius = (bot.Name == "APEX" || other.Name == "APEX") ? 90f : 45f;
+                float overlapRadius = (bot.Name == "APEX" || other.Name == "APEX") ? 180f : 45f;
                     if (d < overlapRadius && d > 0.1f) {
                         bot.Position += Vector2.Normalize(bot.Position - other.Position) * (overlapRadius - d) * 0.5f;
                     }
                 }
-                lock(ConnectedPlayers) {
+                lock(_connectedPlayersLock) {
                     foreach (var p in ConnectedPlayers) {
                         Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
                         float d = Vector2.Distance(bot.Position, pPos);
-                        float overlapRadius = (bot.Name == "APEX") ? 90f : 45f;
+                    float overlapRadius = (bot.Name == "APEX") ? 180f : 45f;
                         if (d < overlapRadius && d > 0.1f) {
                             bot.Position += Vector2.Normalize(bot.Position - pPos) * (overlapRadius - d) * 0.5f;
                         }
@@ -694,9 +806,283 @@ public class ServerProgram
             }
         }
 
-        void BroadcastRaidUpdate(byte type, float val, SerializableVector2? outpostCenter = null) {
-            lock (ConnectedPlayers) {
+    private static void UpdateApexAI(RaiderBot bot, ServerPlayer target, float dt, Random rand, float minDist)
+        {
+            float hpPct = bot.Health / (float)bot.MaxHealth;
+            Vector2 targetPos = BulletboxWorld.PlayerLocations[target.Username];
+            int hash = bot.Name.GetHashCode();
+            float time = (float)(DateTime.Now.Ticks / 10000000.0);
+
+            // Common movement calculations
+            Vector2 targetOffset = new Vector2(MathF.Cos(hash) * 35f, MathF.Sin(hash) * 35f);
+            Vector2 dir = Vector2.Normalize((targetPos + targetOffset) - bot.Position);
+            Vector2 sideStepDir = new Vector2(-dir.Y, dir.X);
+            float strafeFreq = 2.0f + (Math.Abs(hash) % 300 / 100f);
+            float strafeAmp = 150f + (Math.Abs(hash) % 150);
+            float strafeAmount = MathF.Sin(time * strafeFreq + hash) * strafeAmp;
+            
+            // Teleport on damage (Stage 4 & 5)
+            if (hpPct <= 0.3f && bot.Health < bot.PreviousHealth)
+            {
+                TeleportApex(bot, rand);
+                return; // Skip further AI for this frame after teleport
+            }
+
+            // Stage 5: Teleports without damage, 2-4 bombs, charges every 3s
+            if (hpPct <= 0.1f)
+            {
+                bot.ApexTeleportTimer -= dt;
+                if (bot.ApexTeleportTimer <= 0)
+                {
+                    TeleportApex(bot, rand);
+                    bot.ApexTeleportTimer = 2.0f + (float)rand.NextDouble() * 1.0f; // Teleport every 2-3 seconds
+                    return; // Skip further AI for this frame after teleport
+                }
+
+                // Aggressively circle the player while bombarding them in Stage 5
+                bot.Position += (dir * ((minDist - 400f) * 0.5f) + sideStepDir * strafeAmount) * dt;
+
+                // Charge every 3 seconds
+                if (bot.ChargePhase == 0) {
+                    bot.ChargeCooldown -= dt;
+                    if (bot.ChargeCooldown <= 0) {
+                        bot.ChargePhase = 1;
+                        bot.ChargeTimer = 1.0f; // 1s Backing up phase
+                        bot.ChargeCooldown = 3.0f; // Fixed 3s cooldown
+                    }
+                }
+                // Bomb attack: 2-4 bombs at a time, very frequent
+                bot.AttackTimer += dt;
+                if (bot.AttackTimer >= 0.5f) // Very frequent bombs
+                {
+                    bot.AttackTimer = 0;
+                    int numBombs = rand.Next(2, 5); // 2 to 4 bombs
+                        for (int i = 0; i < numBombs; i++) // Use a loop for multiple bombs
+                    {
+                        Vector2 bombDir = Vector2.Normalize(targetPos - bot.Position + new Vector2(rand.Next(-50, 50), rand.Next(-50, 50))); // Slight spread
+                        float bombSpeed = 850f;
+                        lock(BulletboxWorld.ActiveBombs) {
+                            var b = new ServerBomb(bot.Position, bombDir * bombSpeed, bot.Name);
+                            b.TargetPlayer = target.Username;
+                            BulletboxWorld.ActiveBombs.Add(b);
+                        }
+                        BroadcastBomb(bot.Position, bombDir * bombSpeed);
+                    }
+                }
+            }
+            // Stage 4: Frequent bombs, better aim charge, teleports on damage (handled above)
+            else if (hpPct <= 0.3f)
+            {
+                // Charge more frequently
+                if (bot.ChargePhase == 0) {
+                    bot.ChargeCooldown -= dt;
+                    if (bot.ChargeCooldown <= 0) {
+                        bot.ChargePhase = 1;
+                        bot.ChargeTimer = 0.8f; // Shorter back off for faster charges
+                        bot.ChargeCooldown = 5.0f + (float)rand.NextDouble() * 2.0f; // 5-7s cooldown
+                    }
+                }
+                // Bomb attack: More frequent
+                bot.AttackTimer += dt;
+                if (bot.AttackTimer >= 1.0f) // More frequent bombs
+                {
+                    bot.AttackTimer = 0;
+                    Vector2 bombDir = Vector2.Normalize(targetPos - bot.Position);
+                    float bombSpeed = 850f;
+                    lock(BulletboxWorld.ActiveBombs) {
+                        var b = new ServerBomb(bot.Position, bombDir * bombSpeed, bot.Name);
+                        b.TargetPlayer = target.Username;
+                        BulletboxWorld.ActiveBombs.Add(b);
+                    }
+                    BroadcastBomb(bot.Position, bombDir * bombSpeed, bot.Dimension);
+                }
+            }
+            // Stage 3: No melee, charge attack, backs off, shoots bombs. Initial 10 bombs.
+            else if (hpPct <= 0.5f) // 50-30%
+            {
+                if (!bot.HasTriggeredStage3Intro)
+                {
+                    bot.HasTriggeredStage3Intro = true;
+                    // Spawn 10 bombs simultaneously
+                    for (int i = 0; i < 10; i++)
+                    {
+                        float angle = (float)(rand.NextDouble() * MathF.PI * 2);
+                        Vector2 bombDir = new Vector2(MathF.Cos(angle), MathF.Sin(angle));
+                        float bombSpeed = 850f;
+                        lock(BulletboxWorld.ActiveBombs) { // Ensure thread safety
+                            var b = new ServerBomb(bot.Position, bombDir * bombSpeed, bot.Name);
+                            b.TargetPlayer = target.Username; // Target player for better tracking
+                            BulletboxWorld.ActiveBombs.Add(b);
+                        }
+                        BroadcastBomb(bot.Position, bombDir * bombSpeed, bot.Dimension);
+                    }
+                }
+                // AI Loop: Charge or back off/bomb
+                if (bot.ChargePhase == 0) {
+                    bot.ChargeCooldown -= dt;
+                    if (bot.ChargeCooldown <= 0) {
+                        bot.ChargePhase = 1;
+                        bot.ChargeTimer = 1.0f; // 1s Backing up phase
+                        bot.ChargeCooldown = 10.0f + (float)rand.NextDouble() * 5.0f; // Longer cooldown for charge
+                    }
+                }
+                // If not charging, move away and shoot bombs (similar to Stage 2)
+                if (bot.ChargePhase == 0) {
+                    dir = Vector2.Normalize(bot.Position - targetPos); // Move away
+                    // Apply aggressive orbital movement while backing off
+                    bot.Position += (dir * 260f + sideStepDir * strafeAmount) * dt;
+
+                    bot.AttackTimer += dt;
+                    if (bot.AttackTimer >= 2.0f) // Shoot bombs every 2 seconds
+                    {
+                        bot.AttackTimer = 0;
+                        Vector2 bombDir = Vector2.Normalize(targetPos - bot.Position);
+                        float bombSpeed = 850f;
+                        lock(BulletboxWorld.ActiveBombs) {
+                            var b = new ServerBomb(bot.Position, bombDir * bombSpeed, bot.Name);
+                            b.TargetPlayer = target.Username;
+                            BulletboxWorld.ActiveBombs.Add(b);
+                        }
+                            BroadcastBomb(bot.Position, bombDir * bombSpeed, bot.Dimension); // Broadcast each bomb
+                    }
+                }
+            }
+            // Stage 2: Backs off longer, shoots bombs
+            else if (hpPct <= 0.8f) // 80-50%
+            {
+                // Maintain engagement distance through circling instead of linear retreat
+                float distFactor = (minDist - 550f) * 0.5f;
+                bot.Position += (dir * distFactor + sideStepDir * strafeAmount) * dt;
+
+                bot.AttackTimer += dt;
+                if (bot.AttackTimer >= 3.0f) // Shoot bombs every 3 seconds
+                {
+                    bot.AttackTimer = 0;
+                    Vector2 bombDir = Vector2.Normalize(targetPos - bot.Position);
+                    float bombSpeed = 850f;
+                    lock(BulletboxWorld.ActiveBombs) {
+                        var b = new ServerBomb(bot.Position, bombDir * bombSpeed, bot.Name);
+                        b.TargetPlayer = target.Username;
+                        BulletboxWorld.ActiveBombs.Add(b);
+                    }
+                    BroadcastBomb(bot.Position, bombDir * bombSpeed, bot.Dimension);
+                }
+            }
+            // Stage 1: Melee attacks, backs off, comes back for more attacks, repeat.
+            else // hpPct > 0.8f (100-80%)
+            {
+                float attackRange = 96f; // Standard melee range
+                float stopDist = attackRange * 0.85f;
+                float moveSpeed = (minDist < stopDist) ? 60f : 260f;
+                bot.Position += (dir * moveSpeed + sideStepDir * strafeAmount) * dt;
+
+                // Standard melee attack logic
+                bot.AttackTimer += dt;
+                if (minDist < attackRange && bot.AttackTimer >= bot.AttackCooldown) {
+                    target.Damage(12); // Standard melee damage
+                    bot.AttackTimer = 0;
+                }
+            }
+
+            // Handle Charge Phases (shared by stages that use charge)
+            if (bot.ChargePhase == 1) {
+                // Phase 1: Back away from the player to telegraph the charge
+                Vector2 fromPlayer = Vector2.Normalize(bot.Position - targetPos);
+                bot.Position += fromPlayer * 250f * dt;
+                bot.ChargeTimer -= dt;
+                if (bot.ChargeTimer <= 0) { // Transition to charge phase
+                    bot.ChargePhase = 2;
+                    bot.ChargeTimer = 0.7f; // Charge duration
+                    bot.ChargeDirection = Vector2.Normalize(targetPos - bot.Position);
+                    bot.HasDealtChargeDamage = false;
+                }
+            }
+            else if (bot.ChargePhase == 2) {
+                // Phase 2: High speed charge
+                bot.Position += bot.ChargeDirection * 1300f * dt;
+                bot.ChargeTimer -= dt;
+                
+                float hitRadius = 45f; // Apex charge hit radius
+                int damage = 40; // Apex charge damage
+
+                if (!bot.HasDealtChargeDamage && Vector2.Distance(bot.Position, targetPos) < hitRadius) {
+                    target.Damage(damage);
+                    target.SyncHealth();
+                    bot.HasDealtChargeDamage = true;
+                }
+
+                if (bot.ChargeTimer <= 0) {
+                    bot.ChargePhase = 0;
+                }
+            }
+        }
+
+    private static void PopulateRaidLoot(Structure s, Random rand)
+    {
+        s.IsCompleted = true; // Mark as completed for chest access after victory
+        s.ChestInventory = new ServerItemStack[18];
+        for (int j = 0; j < 18; j++) s.ChestInventory[j] = new ServerItemStack("none", 0);
+
+        // Weighted loot pool: Higher weight means more common
+        var pool = new List<LootPoolEntry> {
+            new LootPoolEntry("rock", 60, 1, 3),
+            new LootPoolEntry("raidshroom", 95, 2, 8),
+            new LootPoolEntry("copper", 60, 1, 3),
+            new LootPoolEntry("iron", 50, 1, 4),
+            new LootPoolEntry("quartz", 20, 1, 3),
+            new LootPoolEntry("pearl", 10, 1, 3),
+            new LootPoolEntry("shield", 20, 1, 1),
+            new LootPoolEntry("wooden_axe", 20, 1, 1),
+            new LootPoolEntry("wooden_scythe", 10, 1, 1),
+            new LootPoolEntry("wooden_spear", 15, 1, 1),
+            new LootPoolEntry("stone_sword", 10, 1, 1),
+            new LootPoolEntry("stone_axe", 15, 1, 1),
+            new LootPoolEntry("stone_scythe", 20, 1, 1),
+            new LootPoolEntry("stone_spear", 20, 1, 1),
+            new LootPoolEntry("diamond", 9, 1, 3),
+            new LootPoolEntry("stone_kanabo", 4, 1, 1)
+        };
+
+        int totalWeight = pool.Sum(e => e.Weight);
+        int lootCount = rand.Next(4, 9);
+
+        for (int j = 0; j < lootCount; j++) 
+        {
+            int roll = rand.Next(totalWeight);
+            int currentWeight = 0;
+            LootPoolEntry selected = pool[0];
+
+            foreach (var entry in pool) {
+                currentWeight += entry.Weight;
+                if (roll < currentWeight) { selected = entry; break; }
+            }
+
+            int count = rand.Next(selected.MinCount, selected.MaxCount + 1);
+            int slot = rand.Next(18);
+            s.ChestInventory[slot] = new ServerItemStack(selected.ItemID, count);
+        }
+    }
+
+    private static void TeleportApex(RaiderBot bot, Random rand)
+    {
+        // This method is called from UpdateApexAI, so it needs to be static
+            // Teleport 200-400 units away in a random direction
+            float angle = (float)(rand.NextDouble() * MathF.PI * 2);
+            float dist = rand.Next(200, 400);
+            bot.Position += new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
+            // Reset any ongoing charge or flee
+            bot.ChargePhase = 0;
+            bot.ChargeTimer = 0;
+            bot.FleeTimer = 0;
+            bot.WanderTarget = null;
+            Console.WriteLine($"[Server] APEX teleported to {bot.Position.X}, {bot.Position.Y}");
+        }
+
+    private static void BroadcastRaidUpdate(byte type, float val, SerializableVector2? outpostCenter = null, Dimension? targetDim = null) {
+        // This method is called from RunServerAsync and UpdateRaiderAI, so it needs to be static
+            lock (_connectedPlayersLock) {
                 foreach (var p in ConnectedPlayers) {
+                    if (targetDim.HasValue && p.CurrentDimension != targetDim.Value) continue;
                     try { lock (p.WriterLock) { 
                         p.Writer.Write((byte)11); 
                         p.Writer.Write(type); 
@@ -710,9 +1096,11 @@ public class ServerProgram
             }
         }
 
-        void BroadcastBomb(Vector2 start, Vector2 velocity) {
-            lock (ConnectedPlayers) {
+    private static void BroadcastBomb(Vector2 start, Vector2 velocity, Dimension? targetDim = null) {
+        // This method is called from RunServerAsync and UpdateApexAI, so it needs to be static
+            lock (_connectedPlayersLock) {
                 foreach (var p in ConnectedPlayers) {
+                    if (targetDim.HasValue && p.CurrentDimension != targetDim.Value) continue;
                     try { lock (p.WriterLock) { 
                         p.Writer.Write((byte)16); 
                         p.Writer.Write(start.X); p.Writer.Write(start.Y);
@@ -723,9 +1111,11 @@ public class ServerProgram
             }
         }
 
-        void BroadcastGust(Vector2 start, Vector2 velocity) { // NEW
-            lock (ConnectedPlayers) {
+    private static void BroadcastGust(Vector2 start, Vector2 velocity, Dimension? targetDim = null) { // NEW
+        // This method is called from RunServerAsync and UpdateRaiderAI, so it needs to be static
+            lock (_connectedPlayersLock) {
                 foreach (var p in ConnectedPlayers) {
+                    if (targetDim.HasValue && p.CurrentDimension != targetDim.Value) continue;
                     try { lock (p.WriterLock) { 
                         p.Writer.Write((byte)17); // Packet ID 17 for gust
                         p.Writer.Write(start.X); p.Writer.Write(start.Y);
@@ -737,9 +1127,9 @@ public class ServerProgram
         }
 
 
-
-        void BroadcastBotMove(RaiderBot bot) {
-            lock (ConnectedPlayers) {
+    private static void BroadcastBotMove(RaiderBot bot) {
+        // This method is called from RunServerAsync and UpdateRaiderAI, so it needs to be static
+            lock (_connectedPlayersLock) {
                 foreach (var p in ConnectedPlayers) {
                     try {
                         lock (p.WriterLock) {
@@ -761,35 +1151,6 @@ public class ServerProgram
             }
         }
 
-        try
-        {
-            while (IsRunning)
-            {
-                if (!listener.Pending()) { await Task.Delay(100); continue; }
-                TcpClient clientSocket = await listener.AcceptTcpClientAsync();
-                
-                ServerPlayer newPlayer = new ServerPlayer(clientSocket);
-                
-                lock(ConnectedPlayers) { ConnectedPlayers.Add(newPlayer); }
-                
-                _ = Task.Run(async () => {
-                    await newPlayer.Listen(BulletboxWorld);
-                    
-                    string leavingUser = newPlayer.Username;
-                    lock(ConnectedPlayers) 
-                    { 
-                        ConnectedPlayers.Remove(newPlayer);
-                        // Notify all remaining clients that this player is gone
-                        foreach(var p in ConnectedPlayers) p.SendLeaveSignal(leavingUser);
-                    }
-                    Console.WriteLine($"[Server] Player {leavingUser} disconnected.");
-                });
-            }
-        }
-        catch (Exception ex) { Console.WriteLine($"[Server] Error: {ex.Message}"); }
-        finally { listener.Stop(); IsRunning = false; }
-    }
-
     public static void SpawnAPEX(ServerWorld world)
     {
         var apex = new RaiderBot("APEX", new Vector2(100, 100)) { 
@@ -806,27 +1167,30 @@ public class ServerProgram
     public static void SaveGame() {
         if (!IsRunning || Program.LastIP != "127.0.0.1") return;
 
-        // PROTECTION: If no players are connected, don't save. 
-        // This prevents the server from wiping the save file if it ticks while a player is joining/leaving.
-        lock (ConnectedPlayers) {
-            if (ConnectedPlayers.Count == 0) return;
+        lock (LoadedPlayers) {
+            // Sync current online player data into the persistent dictionary cache
+            foreach (var p in ConnectedPlayers) {
+                if (string.IsNullOrEmpty(p.Username)) continue;
+
+                LoadedPlayers[p.Username] = new PlayerSaveData {
+                    Username = p.Username, Health = p.Health, MaxHealth = p.MaxHealth, Hunger = p.Hunger,
+                    Position = p.Position, Rotation = p.Rotation, IsBlocking = p.IsBlocking,
+                    CurrentDimension = p.CurrentDimension, SelectedSlot = p.SelectedSlot, 
+                    AshenTime = p.AshenTime, BrimstalkerCooldown = p.BrimstalkerCooldown,
+                    Inventory = (ServerItemStack[])p.Inventory.Clone(), // Save a unique copy of the items
+                    CraftingSlot1 = p.CraftingSlot1, CraftingSlot2 = p.CraftingSlot2
+                };
+            }
         }
+
+        if (LoadedPlayers.Count == 0) return; // Protection: Don't overwrite if no players have ever joined
 
         Console.WriteLine("[Server] Saving game state...");
         WorldSaveData saveData = new WorldSaveData();
         saveData.Seed = BulletboxWorld.Seed;
-
-        lock (ConnectedPlayers) {
-            foreach (var p in ConnectedPlayers) {
-                saveData.Players.Add(new PlayerSaveData {
-                    Username = p.Username, Health = p.Health, MaxHealth = p.MaxHealth, Hunger = p.Hunger,
-                    Position = p.Position, Rotation = p.Rotation, IsBlocking = p.IsBlocking,
-                    CurrentDimension = p.CurrentDimension, SelectedSlot = p.SelectedSlot,
-                    AshenTime = p.AshenTime, BrimstalkerCooldown = p.BrimstalkerCooldown,
-                    Inventory = p.Inventory, CraftingSlot1 = p.CraftingSlot1, CraftingSlot2 = p.CraftingSlot2
-                });
-            }
-        }
+        
+        // Persist ALL known players (both online and offline)
+        lock (LoadedPlayers) { saveData.Players.AddRange(LoadedPlayers.Values); }
 
         lock (BulletboxWorld.Raiders) {
             foreach (var r in BulletboxWorld.Raiders) {
@@ -859,7 +1223,11 @@ public class ServerProgram
         saveData.ActiveRaidOutpostPosition = BulletboxWorld.ActiveRaidOutpostPosition;
 
         try {
-            string jsonString = JsonSerializer.Serialize(saveData, new JsonSerializerOptions { WriteIndented = true, IncludeFields = true });
+            string jsonString = JsonSerializer.Serialize(saveData, new JsonSerializerOptions { 
+                WriteIndented = true, 
+                IncludeFields = true,
+                NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals // Allow NaN/Infinity
+            });
             File.WriteAllText(SinglePlayerSavePath, jsonString);
             Console.WriteLine("[Server] Game state saved successfully.");
         } catch (Exception ex) {
@@ -932,18 +1300,47 @@ public class ServerProgram
             BulletboxWorld.RaidActive = saveData.RaidActive;
             BulletboxWorld.ActiveRaidOutpostPosition = saveData.ActiveRaidOutpostPosition;
 
-            LoadedPlayers.Clear();
-            foreach (var pData in saveData.Players) {
-                if (pData == null || string.IsNullOrEmpty(pData.Username)) continue;
-                sanitizeInventory(pData.Inventory);
-                if (pData.CraftingSlot1.ItemID == null) pData.CraftingSlot1 = new ServerItemStack("none", 0);
-                if (pData.CraftingSlot2.ItemID == null) pData.CraftingSlot2 = new ServerItemStack("none", 0);
-                LoadedPlayers[pData.Username] = pData;
+            lock (LoadedPlayers) {
+                LoadedPlayers.Clear();
+                foreach (var pData in saveData.Players) {
+                    if (pData == null || string.IsNullOrEmpty(pData.Username)) continue;
+                    sanitizeInventory(pData.Inventory);
+                    if (pData.CraftingSlot1.ItemID == null) pData.CraftingSlot1 = new ServerItemStack("none", 0);
+                    if (pData.CraftingSlot2.ItemID == null) pData.CraftingSlot2 = new ServerItemStack("none", 0);
+                    // LastKnownBiome is not loaded here as PlayerSaveData definition is not available.
+                    LoadedPlayers[pData.Username] = pData;
+                }
             }
             return true;
         } catch (Exception ex) {
             Console.WriteLine($"[Server] Error loading game state: {ex.Message}");
             return false;
         }
+    }
+
+    private struct LootPoolEntry
+    {
+        public string ItemID;
+        public int Weight;
+        public int MinCount;
+        public int MaxCount;
+        public LootPoolEntry(string id, int weight, int min, int max)
+        {
+            ItemID = id; Weight = weight; MinCount = min; MaxCount = max;
+        }
+    }
+
+    public static void TriggerAdvancement(ServerPlayer p, string id)
+    {
+        if (string.IsNullOrEmpty(p.Username) || p.TriggeredAdvancements.Contains(id)) return;
+
+        try {
+            lock (p.WriterLock) {
+                p.TriggeredAdvancements.Add(id);
+                p.Writer.Write((byte)25); // Use 25 to avoid collisions with Chest Move (20)
+                p.Writer.Write(id);
+                p.Writer.Flush();
+            }
+        } catch {}
     }
 }

@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Threading.Tasks;
 using System.Numerics;
 using System.Collections.Generic;
+using System.Linq;
 
 // Data structure must match client exactly
 public struct ServerItemStack {
@@ -35,6 +36,8 @@ public class ServerPlayer
 
     public float AshenTime = 0f;
     public float BrimstalkerCooldown = 0f;
+    public BiomeType LastKnownBiome = (BiomeType)255; // Track last biome for advancement
+    public HashSet<string> TriggeredAdvancements = new();
 
     public readonly object WriterLock = new();
 
@@ -65,14 +68,16 @@ public class ServerPlayer
 
                 if (packetId == 0) // Login
                 {
-                    Username = _reader.ReadString();
+                    string loginName = _reader.ReadString();
                     string clientVer = _reader.ReadString();
                     _reader.ReadString(); // password
                     
                     // Try to find this specific player in the loaded save dictionary
-                    if (ServerProgram.LoadedPlayers.TryGetValue(Username, out var savedData))
+                    PlayerSaveData? savedData = null;
+                    lock (ServerProgram.LoadedPlayers) { ServerProgram.LoadedPlayers.TryGetValue(loginName, out savedData); }
+                    if (savedData != null)
                     {
-                        Console.WriteLine($"[Server] Found saved data for {Username}. Applying...");
+                        Console.WriteLine($"[Server] Found saved data for {loginName}. Applying...");
                         Health = savedData.Health;
                         MaxHealth = savedData.MaxHealth;
                         Hunger = savedData.Hunger;
@@ -83,14 +88,22 @@ public class ServerPlayer
                         SelectedSlot = savedData.SelectedSlot;
                         AshenTime = savedData.AshenTime;
                         BrimstalkerCooldown = savedData.BrimstalkerCooldown;
-                        Inventory = savedData.Inventory;
+
+                        // NEW: Sanitize loaded position to prevent NaN propagation
+                        if (float.IsNaN(Position.X) || float.IsNaN(Position.Y) || float.IsInfinity(Position.X) || float.IsInfinity(Position.Y))
+                        {
+                            Console.WriteLine($"[Server] WARNING: Loaded position for {loginName} contained NaN/Infinity. Resetting to default spawn.");
+                            Position = new Vector2(400, 300);
+                        }
+                        // Create a unique copy of the inventory array for the live session
+                        Inventory = (ServerItemStack[])savedData.Inventory.Clone();
                         CraftingSlot1 = savedData.CraftingSlot1;
                         CraftingSlot2 = savedData.CraftingSlot2;
 
                         // If the player is loading in with no health, treat it as a respawn
                         if (Health <= 0)
                         {
-                            Console.WriteLine($"[Server] {Username} joined while dead. Teleporting to Overworld spawn.");
+                            Console.WriteLine($"[Server] {loginName} joined while dead. Teleporting to Overworld spawn.");
                             Health = MaxHealth;
                             Hunger = 100;
                             Position = Vector2.Zero;
@@ -107,10 +120,17 @@ public class ServerPlayer
                     }
                     else
                     {
-                        Console.WriteLine($"[Server] No saved data found for {Username}. Starting fresh.");
+                        Console.WriteLine($"[Server] No saved data found for {loginName}. Starting fresh.");
                         Position = new Vector2(400, 300); // Set initial position
                         Inventory[0] = new ServerItemStack("iron_sword", 1); // Starting weapon
                     }
+
+                    // After loading/setting position, determine the initial biome
+                    var initialChunk = world.GetOrGenerateChunk((int)MathF.Floor(Position.X / 16), (int)MathF.Floor(Position.Y / 16), CurrentDimension);
+                    LastKnownBiome = initialChunk.Biome;
+
+                    // Authoritative Sync: Only set the public Username AFTER inventory is safe
+                    Username = loginName;
 
                     // Authoritative Sync: Ensure the world map is updated with the position (loaded or default)
                     world.UpdatePosition(Username, Position.X, Position.Y);
@@ -131,7 +151,13 @@ public class ServerPlayer
                 {
                     float x = _reader.ReadSingle();
                     float y = _reader.ReadSingle();
-                    Position = new Vector2(x, y); // Update server's authoritative position
+                    // NEW: Sanitize incoming position from client
+                    if (!float.IsNaN(x) && !float.IsNaN(y) && !float.IsInfinity(x) && !float.IsInfinity(y))
+                    {
+                        Position = new Vector2(x, y); // Update server's authoritative position
+                    }
+                    else
+                    { Console.WriteLine($"[Server] WARNING: Client {Username} sent NaN/Infinity position. Ignoring update."); }
                     Rotation = _reader.ReadSingle();
                     world.UpdatePosition(Username, Position.X, Position.Y);
                     BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking, Health, MaxHealth, CurrentDimension);
@@ -273,7 +299,16 @@ public class ServerPlayer
                                     }
                                     // Notify all clients to remove this bot from their screens
                                     lock (ServerProgram.ConnectedPlayers) {
-                                        foreach (var p in ServerProgram.ConnectedPlayers) p.SendLeaveSignal(bot.Name);
+                                        foreach (var p in ServerProgram.ConnectedPlayers)
+                                        {
+                                            p.SendLeaveSignal(bot.Name);
+                                            if (bot.Name == "APEX") ServerProgram.TriggerAdvancement(p, "DefeatApex");
+                                            if (bot.Name == "Brimstalker") ServerProgram.TriggerAdvancement(p, "DefeatBrimstalker");
+                                            if (bot.Name.StartsWith("Raider")) ServerProgram.TriggerAdvancement(p, "Kill:Raider");
+                                            if (bot.Name.StartsWith("Flicker")) ServerProgram.TriggerAdvancement(p, "Kill:Flicker");
+                                            if (bot.Name.StartsWith("Vortex")) ServerProgram.TriggerAdvancement(p, "Kill:Vortex");
+                                            if (bot.Name == "Brimstalker") ServerProgram.TriggerAdvancement(p, "Kill:Brimstalker");
+                                        }
                                     }
                                     if (bot.Name.StartsWith("Raider")) AddItem("raidshroom", Random.Shared.Next(1, 4));
                                     if (bot.Name.StartsWith("Vortex")) AddItem("pearl", Random.Shared.Next(1, 3));
@@ -417,7 +452,7 @@ public class ServerPlayer
                         }
                         // Teleport to The End
                         CurrentDimension = Dimension.TheEnd;
-                        Position = new Vector2(0, 0); // Reset position in new dimension
+                        Position = new Vector2(250, 250); // Reset position away from the exit portal (0,0)
                         world.UpdatePosition(Username, Position.X, Position.Y);
                         SendDimensionUpdate();
                         
@@ -511,6 +546,30 @@ public class ServerPlayer
                 if (amount <= 0) break;
             }
         }
+
+        // Trigger Obtain advancements
+        if (itemId == "diamond") ServerProgram.TriggerAdvancement(this, "ObtainDiamonds");
+        if (itemId == "diamond_sword") ServerProgram.TriggerAdvancement(this, "ObtainDiamondSword");
+        if (itemId == "stone_kanabo") ServerProgram.TriggerAdvancement(this, "ObtainKanabo");
+        if (itemId == "brimstone_pearl") ServerProgram.TriggerAdvancement(this, "ObtainBrimstonePearl");
+        if (itemId.StartsWith("brimstone_") && itemId != "brimstone_powder" && itemId != "brimstone_pearl") 
+            ServerProgram.TriggerAdvancement(this, "ObtainBrimstone");
+        
+        // Check for ObtainAllDiamond (Set of Sword, Axe, Scythe, Spear)
+        bool hasS = Inventory.Any(i => i.ItemID == "diamond_sword");
+        bool hasA = Inventory.Any(i => i.ItemID == "diamond_axe");
+        bool hasSc = Inventory.Any(i => i.ItemID == "diamond_scythe");
+        bool hasSp = Inventory.Any(i => i.ItemID == "diamond_spear");
+        if (hasS && hasA && hasSc && hasSp) ServerProgram.TriggerAdvancement(this, "ObtainAllDiamond");
+
+        // Check for ObtainAllBrimstone
+        bool hasBS = Inventory.Any(i => i.ItemID == "brimstone_sword");
+        bool hasBA = Inventory.Any(i => i.ItemID == "brimstone_axe");
+        bool hasBSc = Inventory.Any(i => i.ItemID == "brimstone_scythe");
+        bool hasBSp = Inventory.Any(i => i.ItemID == "brimstone_spear");
+        bool hasBK = Inventory.Any(i => i.ItemID == "brimstone_kanabo");
+        if (hasBS && hasBA && hasBSc && hasBSp && hasBK) ServerProgram.TriggerAdvancement(this, "ObtainAllBrimstone");
+
         SendFullInventory();
     }
 
@@ -619,6 +678,8 @@ public class ServerPlayer
         {
             Writer.Write((byte)21); // Packet ID 21: Dimension Update
             Writer.Write((byte)CurrentDimension);
+            Writer.Write(Position.X);
+            Writer.Write(Position.Y);
             Writer.Flush();
         }
     }

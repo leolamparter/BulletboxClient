@@ -72,6 +72,17 @@ public class VisualGust // NEW
     public VisualGust(Vector2 pos, Vector2 vel) { Position = pos; Velocity = vel; Life = 1.0f; Rotation = 0; }
 }
 
+public class AdvancementNotification
+{
+    public string Title;
+    public float Timer = 0f;
+    public float SlideY = -100f;
+    public float HeaderAlpha = 1f;
+    public float TitleAlpha = 0f;
+    public bool Finished = false;
+    public AdvancementNotification(string title) { Title = title; }
+}
+
 // The StructureType enum and Structure class are now in BulletboxClient/Structure.cs
 public class Playing
 {
@@ -109,6 +120,8 @@ public class Playing
     private List<VisualGust> _visualGusts = new(); // NEW
     private readonly object _gustsLock = new();
 
+    private List<AdvancementNotification> _activePopups = new();
+
     // Optimization Caches
     private Dictionary<(int, int), byte> _chunkSnapshot = new();
     private Dictionary<(int, int), byte> _featureSnapshot = new();
@@ -120,6 +133,9 @@ public class Playing
     private int _lastScreenWidth;
     private int _lastScreenHeight;
 
+    private float _speedrunTime = 0f;
+    private bool _speedrunFinished = false;
+    private Dimension _lastDimension = (Dimension)0;
     // Combat Timers
     private float _cAttackTimer = 0f; 
     private float _cHitTimer = 10f;   
@@ -273,6 +289,12 @@ public class Playing
         AssetManager.LoadTexture("brimstalker_angry", "resources/textures/entity/brimstalker/angry.png");
         AssetManager.LoadTexture("brimstalker_afraid", "resources/textures/entity/brimstalker/afraid.png");
         
+        // Load Apex Boss stages
+        AssetManager.LoadTexture("apex_stage1", "resources/textures/entity/apex/stage1.png");
+        AssetManager.LoadTexture("apex_stage2", "resources/textures/entity/apex/stage2.png");
+        AssetManager.LoadTexture("apex_stage3", "resources/textures/entity/apex/stage3.png");
+        AssetManager.LoadTexture("apex_stage4", "resources/textures/entity/apex/stage4.png");
+
         // Load Vortex textures (NEW)
         AssetManager.LoadTexture("vortex_idle", "resources/textures/entity/vortex/idle.png");
         AssetManager.LoadTexture("vortex_angry", "resources/textures/entity/vortex/angry.png");
@@ -483,6 +505,7 @@ public class Playing
         // --- Ambience Management ---
         void ManageAmbience(string key, bool active, float maxVol = 0.15f) // Reduced default maxVol
         {
+            maxVol *= Program.SfxVolume; // Apply global SFX volume setting
             if (!_ambientVolumes.ContainsKey(key)) _ambientVolumes[key] = 0f;
             
             if (active && !Program.IsPaused) // Ambience should still pause with the game
@@ -549,6 +572,48 @@ public class Playing
         _needsCacheClear = true;
     }
 
+    public void TriggerAdvancementPopup(string key)
+    {
+        var adv = AdvancementsScreen.AllAdvancements.FirstOrDefault(a => a.Key == key);
+        if (!string.IsNullOrEmpty(adv.Title))
+        {
+            _activePopups.Add(new AdvancementNotification(adv.Title));
+        }
+    }
+
+    private void UpdatePopups(float dt)
+    {
+        for (int i = _activePopups.Count - 1; i >= 0; i--)
+        {
+            var p = _activePopups[i];
+            p.Timer += dt;
+
+            // Slide In (0.5s)
+            if (p.Timer < 0.5f) p.SlideY = -100 + (20 - (-100)) * (p.Timer / 0.5f);
+            
+            // Stage 1: "ADVANCEMENT COMPLETE!" visible for 1s
+            else if (p.Timer < 1.5f) { p.SlideY = 20; p.HeaderAlpha = 1; p.TitleAlpha = 0; }
+            
+            // Stage 2: Crossfade (0.5s)
+            else if (p.Timer < 2.0f)
+            {
+                float t = (p.Timer - 1.5f) / 0.5f;
+                p.HeaderAlpha = 1.0f - t;
+                p.TitleAlpha = t;
+            }
+            
+            // Stage 3: Title visible for 2s
+            else if (p.Timer < 4.0f) { p.HeaderAlpha = 0; p.TitleAlpha = 1; }
+            
+            // Stage 4: Slide Out (0.5s)
+            else if (p.Timer < 4.5f) p.SlideY = 20 + (-100 - 20) * ((p.Timer - 4.0f) / 0.5f);
+            
+            else p.Finished = true;
+
+            if (p.Finished) _activePopups.RemoveAt(i);
+        }
+    }
+
     private void ClearWorldCaches()
     {
         loadedChunks.Clear();
@@ -560,7 +625,6 @@ public class Playing
         Structures.Clear();
         _lastPlayerChunkX = int.MaxValue;
         _lastPlayerChunkY = int.MaxValue;
-        LocalPlayer.Position = Vector2.Zero;
         Cam.RaylibCamera.Target = new Vector2(32, 32); // Snap camera to player center
     }
 
@@ -581,20 +645,28 @@ public class Playing
         bool isMenuOpen = Program.IsPaused || Program.CurrentState == GameState.OPTIONS;
         bool runGameLogic = !isMenuOpen || (Program.Net.IsConnected() && Program.LastIP != "127.0.0.1");
 
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
+
         // Handle Window Resizing for Render Textures
-        if (windowResized)
+        if (windowResized || sw != _lastScreenWidth || sh != _lastScreenHeight)
         {
             Raylib.UnloadRenderTexture(_sceneTarget);
             Raylib.UnloadRenderTexture(_lightingTarget);
-            
-            int sw = Raylib.GetScreenWidth();
-            int sh = Raylib.GetScreenHeight();
             _sceneTarget = Raylib.LoadRenderTexture(sw, sh);
             _lightingTarget = Raylib.LoadRenderTexture(sw, sh);
 
             RedistributeParticles(_lastScreenWidth, _lastScreenHeight, sw, sh);
             _lastScreenWidth = sw;
             _lastScreenHeight = sh;
+
+            // NEW: Clear blended color cache and force chunk re-evaluation on window resize
+            _blendedColorCache.Clear();
+            _pendingBlends.Clear();
+            _sortedPending.Clear();
+            // Force re-evaluation of chunk radius and chunk loading in the next update cycle
+            _lastPlayerChunkX = int.MaxValue;
+            _lastPlayerChunkY = int.MaxValue;
         }
 
         // Update Environment
@@ -602,6 +674,7 @@ public class Playing
         UpdateWeatherParticles(dt);
         UpdateVisualBombs(dt);
         UpdateVisualGusts(dt); // NEW
+        UpdatePopups(dt);
 
         if (_endSequenceTimer >= 0)
         {
@@ -614,12 +687,18 @@ public class Playing
             // Teleport to the end during the black screen (4.2 seconds) to avoid music glitches
             if (_brimstonePearlSlot >= 0 && _endSequenceTimer >= 4.2f)
             {
+                // Update client inventory immediately so the item disappears
+                if (PlayerInventory.Slots[_brimstonePearlSlot].Count > 1)
+                    PlayerInventory.Slots[_brimstonePearlSlot].Count--;
+                else
+                    PlayerInventory.Slots[_brimstonePearlSlot] = new ItemStack("none", 0);
+
                 Program.Net.SendConsumeItem((byte)_brimstonePearlSlot);
                 _brimstonePearlSlot = -2; // Sentinel value: packet sent, waiting for dimension sync
             }
 
             // Return to gameplay once teleport is processed and sequence duration is finished
-            if (_brimstonePearlSlot == -2 && _endSequenceTimer >= 5.5f && Program.Net.CurrentDimension == Dimension.TheEnd)
+            if (_brimstonePearlSlot == -2 && _endSequenceTimer >= 5.5f)
             {
                 _endSequenceTimer = -1f;
                 _brimstonePearlSlot = -1;
@@ -663,6 +742,20 @@ public class Playing
         {
             _cAttackTimer += dt;
             _cHitTimer += dt;
+
+            if (Program.SpeedrunTimerEnabled)
+            {
+                if (!_speedrunFinished)
+                {
+                    _speedrunTime += dt;
+                }
+
+                if (_lastDimension == Dimension.TheEnd && Program.Net.CurrentDimension == (Dimension)0)
+                {
+                    _speedrunFinished = true;
+                }
+                _lastDimension = Program.Net.CurrentDimension;
+            }
 
             // Passive Healing Logic: 5 HP for 4 Hunger per second
             _hungerHealTimer += dt;
@@ -1562,7 +1655,7 @@ public class Playing
                 foreach (var other in combatTargets)
                 {
                     // Increase hitbox size for the APEX boss
-                    float hitBoxSize = (other.Name == "APEX") ? 128f : 64f;
+                    float hitBoxSize = (other.Name == "APEX") ? 256f : 64f;
                     float offset = (64f - hitBoxSize) / 2f;
                     Rectangle hitBox = new Rectangle(other.Position.X + offset, other.Position.Y + offset, hitBoxSize, hitBoxSize);
 
@@ -1932,6 +2025,17 @@ public class Playing
         healthBar.Draw(CurrentHealth, MaxHealth, CurrentHunger);
         Hotbar.Draw();
 
+        if (Program.SpeedrunTimerEnabled)
+        {
+            Color timeColor = _speedrunFinished ? Color.Green : Color.Yellow;
+            TimeSpan ts = TimeSpan.FromSeconds(_speedrunTime);
+            string timeStr = $"TIME: {ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
+            
+            int sw = Raylib.GetScreenWidth();
+            int textWidth = Raylib.MeasureText(timeStr, 25);
+            Raylib.DrawText(timeStr, sw - textWidth - 20, 140, 25, timeColor);
+        }
+
 
         // Draw Global Raid UI
         if (RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f))
@@ -1955,14 +2059,17 @@ public class Playing
             Raylib.DrawRectangleRoundedLines(new Rectangle(x, y, barW, barH), 0.5f, 4, Color.Black);
             
             // Use the thread-safe 'playersToDraw' list we captured earlier in the Draw method
+            bool isApexActive = playersToDraw.Any(o => o.Name == "APEX");
             bool isBrimstalkerActive = playersToDraw.Any(o => o.Name == "Brimstalker");
-            string raidTitle = isBrimstalkerActive ? "BRIMSTALKER" : (RaidActive ? "RAID ENCOUNTER" : "RAID APPROACHING...");
+            string raidTitle = isApexActive ? "APEX" : (isBrimstalkerActive ? "BRIMSTALKER" : (RaidActive ? "RAID ENCOUNTER" : "RAID APPROACHING..."));
             int tw = Raylib.MeasureText(raidTitle, 22);
             Raylib.DrawText(raidTitle, sw / 2 - tw / 2, y - 28, 22, new Color(255, 200, 0, 255));
         }
 
         // UI Visual for Cooldown (Optional, helps testing)
         DrawCooldownUI();
+
+        DrawAdvancementPopups();
 
         // Movement Tutorial Overlay
         if (_showMovementTutorial)
@@ -2113,6 +2220,38 @@ public class Playing
         }
 
         DrawNightVignetteOverlay(); // Draw night vignette absolutely last
+    }
+
+    private void DrawAdvancementPopups()
+    {
+        int sw = Raylib.GetScreenWidth();
+        foreach (var p in _activePopups)
+        {
+            int boxW = 360;
+            int boxH = 60;
+            int x = sw / 2 - boxW / 2;
+            int y = (int)p.SlideY;
+
+            // Background
+            Rectangle rec = new Rectangle(x, y, boxW, boxH);
+            Raylib.DrawRectangleRounded(rec, 0.3f, 8, new Color(0, 0, 0, 220));
+            Raylib.DrawRectangleRoundedLines(rec, 0.3f, 8, Color.RayWhite);
+
+            // Header Text
+            if (p.HeaderAlpha > 0)
+            {
+                string header = "ADVANCEMENT COMPLETE!";
+                int hw = Raylib.MeasureText(header, 20);
+                Raylib.DrawText(header, sw / 2 - hw / 2, y + 20, 20, new Color(255, 215, 0, (int)(p.HeaderAlpha * 255)));
+            }
+
+            // Advancement Title Text
+            if (p.TitleAlpha > 0)
+            {
+                int tw = Raylib.MeasureText(p.Title, 22);
+                Raylib.DrawText(p.Title, sw / 2 - tw / 2, y + 19, 22, new Color(255, 255, 255, (int)(p.TitleAlpha * 255)));
+            }
+        }
     }
 
     private void DrawAtmosphericGradient()

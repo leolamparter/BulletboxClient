@@ -21,8 +21,9 @@ public class HomeScreen
 
         // We initialize with dummy positions; Draw() will position them correctly
         buttons.Add(new UIButton("SINGLEPLAYER", Vector2.Zero, 40, true));
-        buttons.Add(new UIButton("FRIENDS", Vector2.Zero, 40));
+        buttons.Add(new UIButton("ADD-ONS", Vector2.Zero, 40));
         buttons.Add(new UIButton("OPTIONS", Vector2.Zero, 40));
+        buttons.Add(new UIButton("ADVANCEMENTS", Vector2.Zero, 40));
         buttons.Add(new UIButton("QUIT GAME", Vector2.Zero, 40));
     }
 
@@ -42,13 +43,15 @@ public class HomeScreen
                         }
                     });
                 }
-                else if (text == "FRIENDS") {
-                    Program.CurrentState = GameState.FRIENDS;
-                    LanDiscovery.StartListening();
+                else if (text == "ADD-ONS") {
+                    Program.CurrentState = GameState.ADD_ONS;
                 }
                 else if (text == "OPTIONS") {
                     Program.cameFrom = GameState.HOME;
                     Program.CurrentState = GameState.OPTIONS;
+                }
+                else if (text == "ADVANCEMENTS") {
+                    Program.CurrentState = GameState.ADVANCEMENTS;
                 }
                 else if (text == "QUIT GAME") Environment.Exit(0);
             }

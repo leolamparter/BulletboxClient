@@ -5,7 +5,7 @@ using System.IO;
 using BulletboxClient;
 using DiscordRPC;
 
-public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, FRIENDS, DISCONNECTED, DEATH }
+public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, ADD_ONS, DISCONNECTED, DEATH, ADVANCEMENTS }
 
 class Program
 {
@@ -20,6 +20,10 @@ class Program
     public static bool IsEnding = false;
     // NEW: Pause State
     public static string LastIP = "127.0.0.1";
+    public static bool SpeedrunTimerEnabled = false;
+    public static bool MusicEnabled = true;
+    public static float MusicVolume = 0.7f;
+    public static float SfxVolume = 0.8f;
     public static int LastPort = 32308;
     public static bool IsPaused = false;
     private static float _lastAttempt = 0;
@@ -108,7 +112,8 @@ class Program
         LoginScreen loginScreen = new LoginScreen();
         pauseMenu = new PauseMenu(); // Initialize the menu
         splashScreen = new SplashScreen();
-        FriendsScreen friendsScreen = new FriendsScreen();
+        AddOnsScreen addOnsScreen = new AddOnsScreen();
+        AdvancementsScreen advancementsScreen = new AdvancementsScreen();
         OptionsScreen optionsScreen = new OptionsScreen();
         DisconnectedScreen disconnectedScreen = new DisconnectedScreen();
         DeathScreen deathScreen = new DeathScreen();
@@ -212,8 +217,11 @@ class Program
                         Program.DisconnectAndLeave(GameState.DEATH);
                     }
                     break;
-                case GameState.FRIENDS:
-                    friendsScreen.Update(windowResizedThisFrame);
+                case GameState.ADD_ONS:
+                    addOnsScreen.Update(windowResizedThisFrame);
+                    break;
+                case GameState.ADVANCEMENTS:
+                    advancementsScreen.Update(windowResizedThisFrame);
                     break;
                 case GameState.OPTIONS:
                     optionsScreen.Update(windowResizedThisFrame);
@@ -266,8 +274,12 @@ class Program
                     else if (cameFrom == GameState.HOME) HomeScreen.background.Draw();
                     optionsScreen.Draw();
                     break;
-                case GameState.FRIENDS:
-                    friendsScreen.Draw();
+                case GameState.ADD_ONS:
+                    addOnsScreen.Draw();
+                    break;
+                case GameState.ADVANCEMENTS:
+                    HomeScreen.background.Draw();
+                    advancementsScreen.Draw();
                     break;
                 case GameState.DISCONNECTED:
                     disconnectedScreen.Draw();
@@ -288,6 +300,7 @@ class Program
         }
 
         // Call this when the game closes
+        if (LastIP == "127.0.0.1") ServerProgram.SaveGame();
         SaveManager.Save(CurrentUser);
         AudioManager.UnloadAll();
         Raylib.CloseAudioDevice();
@@ -348,8 +361,10 @@ class Program
         // 4. Update Playback
         if (!string.IsNullOrEmpty(_currentMusicKey))
         {
-            AudioManager.SetVolume(_currentMusicKey, volume);
-            if (!AudioManager.IsSoundPlaying(_currentMusicKey)) AudioManager.PlaySound(_currentMusicKey);
+            float finalVol = MusicEnabled ? volume * MusicVolume : 0f;
+            AudioManager.SetVolume(_currentMusicKey, finalVol);
+            if (finalVol > 0 && !AudioManager.IsSoundPlaying(_currentMusicKey)) AudioManager.PlaySound(_currentMusicKey);
+            else if (finalVol <= 0 && AudioManager.IsSoundPlaying(_currentMusicKey)) AudioManager.StopSound(_currentMusicKey);
         }
     }
 

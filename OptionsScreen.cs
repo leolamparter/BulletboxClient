@@ -7,7 +7,7 @@ namespace BulletboxClient;
 public class OptionsScreen
 {
     private Rectangle _sliderBar = new Rectangle(300, 250, 200, 10);
-    private bool _isDragging = false;
+    private int _draggingSlider = -1; // -1: None, 0: FOV, 1: Music, 2: SFX
     private UIButton _backButton = new UIButton("BACK", Vector2.Zero, 30, true);
     private UIButton _reloadButton = new UIButton("RELOAD TEXTURES", Vector2.Zero, 30);
 
@@ -23,36 +23,41 @@ public class OptionsScreen
         float centerX = Raylib.GetScreenWidth() / 2f;
         float centerY = Raylib.GetScreenHeight() / 2f;
 
-        // Center the slider bar for collision logic
-        _sliderBar.X = centerX - (_sliderBar.Width / 2f);
-        _sliderBar.Y = centerY;
-
         // Allow exiting back to the previous screen
         if (Raylib.IsKeyPressed(KeyboardKey.Escape)) Program.CurrentState = Program.cameFrom;
 
         Vector2 mouse = Raylib.GetMousePosition();
 
-        // Simple slider logic
         if (Raylib.IsMouseButtonPressed(MouseButton.Left))
         {
-            // Allow clicking slightly outside the thin bar for better UX
-            Rectangle clickArea = new Rectangle(_sliderBar.X, _sliderBar.Y - 10, _sliderBar.Width, 30);
-            if (Raylib.CheckCollisionPointRec(mouse, clickArea))
-            {
-                _isDragging = true;
-            }
+            // Check FOV Slider
+            if (Raylib.CheckCollisionPointRec(mouse, new Rectangle(centerX - 100, centerY - 90, 200, 30))) _draggingSlider = 0;
+            // Check Music Slider
+            else if (Raylib.CheckCollisionPointRec(mouse, new Rectangle(centerX - 100, centerY + 10, 200, 30))) _draggingSlider = 1;
+            // Check SFX Slider
+            else if (Raylib.CheckCollisionPointRec(mouse, new Rectangle(centerX - 100, centerY + 60, 200, 30))) _draggingSlider = 2;
+            // Check Music Toggle
+            else if (Raylib.CheckCollisionPointRec(mouse, new Rectangle(centerX - 100, centerY - 35, 200, 25))) Program.MusicEnabled = !Program.MusicEnabled;
         }
 
-        if (Raylib.IsMouseButtonReleased(MouseButton.Left)) _isDragging = false;
+        if (Raylib.IsMouseButtonReleased(MouseButton.Left)) _draggingSlider = -1;
+
+        if (_draggingSlider != -1)
+        {
+            float t = Math.Clamp((mouse.X - (centerX - 100)) / 200f, 0.0f, 1.0f);
+            if (_draggingSlider == 0) { Settings.FOV = 0.5f + (t * 1.5f); Program.CurrentUser.FOV = Settings.FOV; }
+            else if (_draggingSlider == 1) Program.MusicVolume = t;
+            else if (_draggingSlider == 2) Program.SfxVolume = t;
+        }
 
         // Update and handle Back Button
-        _backButton.Position = new Vector2(centerX, centerY + 80);
+        _backButton.Position = new Vector2(centerX, centerY + 130);
         if (_backButton.IsClicked()) {
             Program.CurrentState = Program.cameFrom;
         }
 
         // Update and handle Reload Button
-        _reloadButton.Position = new Vector2(centerX, centerY + 140);
+        _reloadButton.Position = new Vector2(centerX, centerY + 180);
         if (_reloadButton.IsClicked()) {
             Program.TriggerSplash(GameState.OPTIONS, () => {
                 AssetManager.UnloadAll();
@@ -61,15 +66,6 @@ public class OptionsScreen
                 }
                 Console.WriteLine("Textures reloaded from disk.");
             });
-        }
-
-        if (_isDragging)
-        {
-            float t = (mouse.X - _sliderBar.X) / _sliderBar.Width;
-            t = Math.Clamp(t, 0.0f, 1.0f);
-            // Map slider 0-1 to Zoom levels 0.5f (Wide FOV) to 2.0f (Narrow FOV)
-            Settings.FOV = 0.5f + (t * 1.5f);
-            Program.CurrentUser.FOV = Settings.FOV;
         }
     }
 
@@ -84,19 +80,33 @@ public class OptionsScreen
 
         string title = "OPTIONS";
         int titleW = Raylib.MeasureText(title, 40);
-        Raylib.DrawText(title, (int)(centerX - titleW / 2), (int)(centerY - 100), 40, Color.White);
+        Raylib.DrawText(title, (int)(centerX - titleW / 2), (int)(centerY - 160), 40, Color.White);
 
+        // FOV Slider
         string label = "Field of View (Zoom)";
         int labelW = Raylib.MeasureText(label, 20);
-        Raylib.DrawText(label, (int)(centerX - labelW / 2), (int)(centerY - 30), 20, Color.LightGray);
+        Raylib.DrawText(label, (int)(centerX - labelW / 2), (int)(centerY - 110), 20, Color.LightGray);
+        DrawSlider(centerX - 100, centerY - 80, (Settings.FOV - 0.5f) / 1.5f, $"{(int)(150 - (Settings.FOV * 60))}");
 
-        Raylib.DrawRectangleRec(_sliderBar, Color.DarkGray);
-        float handlePos = (Settings.FOV - 0.5f) / 1.5f;
-        Raylib.DrawCircle((int)(_sliderBar.X + (handlePos * _sliderBar.Width)), (int)_sliderBar.Y + 5, 10, Color.White);
-        int displayFOV = (int)(150 - (Settings.FOV * 60));
-        Raylib.DrawText($"{displayFOV}", (int)(_sliderBar.X + _sliderBar.Width + 20), (int)_sliderBar.Y - 5, 20, Color.White);
+        // Music Toggle
+        string musicToggle = $"Music: {(Program.MusicEnabled ? "ON" : "OFF")}";
+        int toggleW = Raylib.MeasureText(musicToggle, 20);
+        Raylib.DrawText(musicToggle, (int)(centerX - toggleW / 2), (int)centerY - 35, 20, Program.MusicEnabled ? Color.Green : Color.Red);
+
+        // Music Volume
+        DrawSlider(centerX - 100, centerY + 10, Program.MusicVolume, $"Music: {(int)(Program.MusicVolume * 100)}%");
+
+        // SFX Volume
+        DrawSlider(centerX - 100, centerY + 60, Program.SfxVolume, $"SFX: {(int)(Program.SfxVolume * 100)}%");
 
         _backButton.Draw();
         _reloadButton.Draw();
+    }
+
+    private void DrawSlider(float x, float y, float value, string text)
+    {
+        Raylib.DrawRectangle((int)x, (int)y, 200, 10, Color.DarkGray);
+        Raylib.DrawCircle((int)(x + (value * 200)), (int)y + 5, 10, Color.White);
+        Raylib.DrawText(text, (int)(x + 215), (int)y - 5, 20, Color.White);
     }
 }

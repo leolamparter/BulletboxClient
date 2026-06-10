@@ -1,24 +1,68 @@
 {
-  "Seed": 19771,
+  "Seed": 740881,
   "Players": [
     {
       "Username": "LeonardoDCapitan",
-      "Health": 100,
+      "Health": 0,
       "MaxHealth": 100,
-      "Hunger": 100,
+      "Hunger": 94,
       "Position": {
-        "X": 450.73083,
-        "Y": 214.27216
+        "X": 1098.2083,
+        "Y": -874.62415
       },
-      "Rotation": -157.6718,
+      "Rotation": -37.948856,
       "IsBlocking": false,
-      "CurrentDimension": 0,
+      "CurrentDimension": 1,
       "SelectedSlot": 0,
-      "AshenTime": 0,
-      "BrimstalkerCooldown": 0,
+      "AshenTime": 185.53981,
+      "BrimstalkerCooldown": -0.016263543,
       "Inventory": [
         {
-          "ItemID": "iron_sword",
+          "ItemID": "brimstone_kanabo",
+          "Count": 1
+        },
+        {
+          "ItemID": "brimstone_sword",
+          "Count": 1
+        },
+        {
+          "ItemID": "raidshroom",
+          "Count": 76
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "pearl",
+          "Count": 5
+        },
+        {
+          "ItemID": "wooden_axe",
+          "Count": 1
+        },
+        {
+          "ItemID": "iron",
+          "Count": 4
+        },
+        {
+          "ItemID": "brimstone_powder",
+          "Count": 1
+        },
+        {
+          "ItemID": "rock",
+          "Count": 2
+        },
+        {
+          "ItemID": "wooden_spear",
           "Count": 1
         },
         {
@@ -45,6 +89,158 @@
           "ItemID": "none",
           "Count": 0
         },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "shield",
+          "Count": 1
+        }
+      ],
+      "CraftingSlot1": {
+        "ItemID": "none",
+        "Count": 0
+      },
+      "CraftingSlot2": {
+        "ItemID": "none",
+        "Count": 0
+      }
+    }
+  ],
+  "Raiders": [
+    {
+      "Name": "APEX",
+      "Position": {
+        "X": 1451.6901,
+        "Y": -1024.5419
+      },
+      "Velocity": {
+        "X": 3.8659477E-15,
+        "Y": 6.187421E-16
+      },
+      "Health": 136,
+      "PreviousHealth": 136,
+      "MaxHealth": 2500,
+      "Rotation": 153.24565,
+      "AttackTimer": 0.46257034,
+      "HeldItemID": "none",
+      "AttackCooldown": 0.425,
+      "FleeTimer": 0,
+      "WanderTarget": null,
+      "WanderWaitTimer": 1.3793185,
+      "ChargePhase": 0,
+      "ChargeTimer": 0,
+      "ChargeCooldown": 13.284441,
+      "ChargeDirection": {
+        "X": 0.021012785,
+        "Y": 0.99977916
+      },
+      "HasDealtChargeDamage": true,
+      "Dimension": 1
+    },
+    {
+      "Name": "Flicker 14457",
+      "Position": {
+        "X": -918.65845,
+        "Y": -2569.8516
+      },
+      "Velocity": {
+        "X": 0,
+        "Y": 0
+      },
+      "Health": 50,
+      "PreviousHealth": 50,
+      "MaxHealth": 50,
+      "Rotation": -123.59348,
+      "AttackTimer": 0,
+      "HeldItemID": "none",
+      "AttackCooldown": 0.425,
+      "FleeTimer": 0,
+      "WanderTarget": {
+        "X": -963.02466,
+        "Y": -2636.6445
+      },
+      "WanderWaitTimer": 2,
+      "ChargePhase": 0,
+      "ChargeTimer": 0,
+      "ChargeCooldown": 15,
+      "ChargeDirection": {
+        "X": 0,
+        "Y": 0
+      },
+      "HasDealtChargeDamage": false,
+      "Dimension": 0
+    }
+  ],
+  "ActiveBombs": [
+    {
+      "Position": {
+        "X": 887.2909,
+        "Y": -542.5718
+      },
+      "Velocity": {
+        "X": 699.7358,
+        "Y": 482.56598
+      },
+      "Timer": 4.5593828E-05,
+      "OwnerName": "APEX",
+      "TargetPlayer": "LeonardoDCapitan",
+      "Exploded": false
+    },
+    {
+      "Position": {
+        "X": 884.9896,
+        "Y": -540.7763
+      },
+      "Velocity": {
+        "X": 696.00934,
+        "Y": 487.92532
+      },
+      "Timer": 4.5593828E-05,
+      "OwnerName": "APEX",
+      "TargetPlayer": "LeonardoDCapitan",
+      "Exploded": false
+    }
+  ],
+  "ActiveGusts": [],
+  "Structures": {
+    "-267,-286": {
+      "Position": {
+        "X": -4264,
+        "Y": -4568
+      },
+      "Type": 1,
+      "ChunkX": -267,
+      "ChunkY": -286,
+      "TextureName": "",
+      "IsCompleted": true,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": [
         {
           "ItemID": "none",
           "Count": 0
@@ -117,25 +313,312 @@
           "ItemID": "none",
           "Count": 0
         }
-      ],
-      "CraftingSlot1": {
-        "ItemID": "none",
-        "Count": 0
+      ]
+    },
+    "301,-2806": {
+      "Position": {
+        "X": 4824,
+        "Y": -44888
       },
-      "CraftingSlot2": {
-        "ItemID": "none",
-        "Count": 0
-      }
+      "Type": 1,
+      "ChunkX": 301,
+      "ChunkY": -2806,
+      "TextureName": "",
+      "IsCompleted": false,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": null
+    },
+    "489,-3189": {
+      "Position": {
+        "X": 7832,
+        "Y": -51016
+      },
+      "Type": 1,
+      "ChunkX": 489,
+      "ChunkY": -3189,
+      "TextureName": "",
+      "IsCompleted": false,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": null
+    },
+    "-404,-731": {
+      "Position": {
+        "X": -6456,
+        "Y": -11688
+      },
+      "Type": 1,
+      "ChunkX": -404,
+      "ChunkY": -731,
+      "TextureName": "",
+      "IsCompleted": true,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": [
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "wooden_axe",
+          "Count": 1
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        }
+      ]
+    },
+    "153,-2650": {
+      "Position": {
+        "X": 2456,
+        "Y": -42392
+      },
+      "Type": 1,
+      "ChunkX": 153,
+      "ChunkY": -2650,
+      "TextureName": "",
+      "IsCompleted": false,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": null
+    },
+    "45,-1702": {
+      "Position": {
+        "X": 728,
+        "Y": -27224
+      },
+      "Type": 1,
+      "ChunkX": 45,
+      "ChunkY": -1702,
+      "TextureName": "",
+      "IsCompleted": false,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": null
+    },
+    "-255,-857": {
+      "Position": {
+        "X": -4072,
+        "Y": -13704
+      },
+      "Type": 1,
+      "ChunkX": -255,
+      "ChunkY": -857,
+      "TextureName": "",
+      "IsCompleted": false,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": null
+    },
+    "376,-3509": {
+      "Position": {
+        "X": 6024,
+        "Y": -56136
+      },
+      "Type": 1,
+      "ChunkX": 376,
+      "ChunkY": -3509,
+      "TextureName": "",
+      "IsCompleted": false,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": null
+    },
+    "307,-4099": {
+      "Position": {
+        "X": 4920,
+        "Y": -65576
+      },
+      "Type": 1,
+      "ChunkX": 307,
+      "ChunkY": -4099,
+      "TextureName": "",
+      "IsCompleted": true,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": [
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        },
+        {
+          "ItemID": "none",
+          "Count": 0
+        }
+      ]
+    },
+    "83,-2191": {
+      "Position": {
+        "X": 1336,
+        "Y": -35048
+      },
+      "Type": 1,
+      "ChunkX": 83,
+      "ChunkY": -2191,
+      "TextureName": "",
+      "IsCompleted": false,
+      "RaidCheckTimer": 0,
+      "RaidActive": false,
+      "RaidTimer": 9999,
+      "RaidBossHealth": 0,
+      "HasPlayedCountdown": false,
+      "ChestInventory": null
     }
-  ],
-  "Raiders": [],
-  "ActiveBombs": [],
-  "ActiveGusts": [],
-  "Structures": {},
-  "WorldTime": 3.154635,
-  "FlickerSpawnTimer": 3.154635,
-  "PlayerRegenTimer": 0.15463357,
+  },
+  "WorldTime": 611.26636,
+  "FlickerSpawnTimer": 26.070696,
+  "PlayerRegenTimer": 0.26934174,
   "RaidTimer": 9999,
-  "RaidActive": false,
+  "RaidActive": true,
   "ActiveRaidOutpostPosition": null
 }

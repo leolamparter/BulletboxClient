@@ -213,15 +213,20 @@ public class WorldBackground
         // Slow down the day-night cycle for a calmer menu experience
         _env.Update(dt * 0.25f, false);
         
-        if (windowResized)
+        // Detect resize even if the flag was missed during a state transition
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
+        bool sizeMismatch = _sceneTarget.Texture.Width != sw || _sceneTarget.Texture.Height != sh;
+
+        if (windowResized || sizeMismatch)
         {
             if (_sceneTarget.Id != 0)
             {
                 Raylib.UnloadRenderTexture(_sceneTarget);
                 Raylib.UnloadRenderTexture(_lightingTarget);
             }
-            _sceneTarget = Raylib.LoadRenderTexture(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
-            _lightingTarget = Raylib.LoadRenderTexture(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+            _sceneTarget = Raylib.LoadRenderTexture(sw, sh);
+            _lightingTarget = Raylib.LoadRenderTexture(sw, sh);
                 _chunkCache.Clear();
                 _biomeCache.Clear();
         }

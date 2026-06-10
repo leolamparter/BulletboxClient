@@ -10,7 +10,7 @@ public class PauseMenu
     {
         buttons.Add(new UIButton("BACK TO GAME", Vector2.Zero, 30, true));
         buttons.Add(new UIButton("OPTIONS", Vector2.Zero, 30));
-        buttons.Add(new UIButton("DISCONNECT", Vector2.Zero, 30));
+        buttons.Add(new UIButton("SAVE & QUIT", Vector2.Zero, 30));
     }
 
     public void Update(bool windowResized)

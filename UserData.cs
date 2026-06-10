@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace BulletboxClient;
 
 public class UserData
@@ -11,4 +13,8 @@ public class UserData
     public bool MovementTutorialFinnished { get; set; } = false;
     public bool RaidTutorialFinnished { get; set; } = false;
     public bool RaidCompletedTutorialFinnished { get; set; } = false;
+
+    public HashSet<byte> VisitedBiomes { get; set; } = new();
+    public HashSet<string> KilledOverworld { get; set; } = new();
+    public Dictionary<string, bool> Advancements { get; set; } = new();
 }

@@ -163,8 +163,8 @@ public class Player
             if (tex.Id == 0) return;
 
             bool isShield = OffHandItemID == "shield";
-            float scale = (isShield && IsBlocking) ? 1.0f : 0.65f;
-            float radius = (isShield && IsBlocking) ? 30f : 22f;
+            float scale = 4.0f; // Scaled up to match main hand (4.0f)
+            float radius = (isShield && IsBlocking) ? 38f : 30f; // Adjusted radius for larger scale
             
             float rad = (Rotation - 45f) * (MathF.PI / 180f);
             Vector2 shieldPos = new Vector2(
@@ -172,10 +172,12 @@ public class Player
                 center.Y + MathF.Sin(rad) * radius
             );
 
+            float visualRotation = isShield ? Rotation - 45f : Rotation + 45f;
+
             Rectangle src = new Rectangle(0, 0, tex.Width, tex.Height);
             Rectangle dest = new Rectangle(shieldPos.X, shieldPos.Y, tex.Width * scale, tex.Height * scale);
             Vector2 origin = new Vector2((tex.Width * scale) / 2, (tex.Height * scale) / 2); // Center pivot
-            Raylib.DrawTexturePro(tex, src, dest, origin, Rotation + 45f, Color.White); // Apply 45-degree clockwise rotation
+            Raylib.DrawTexturePro(tex, src, dest, origin, visualRotation, Color.White);
         }
 
         // 3. Execution Pass - Draw body first, then items on top
@@ -185,23 +187,28 @@ public class Player
         bool isVortex = Name.StartsWith("Vortex");
         bool isApex = Name == "APEX";
 
-        float apexScale = 1.0f;
+        float currentScale = 1.0f;
         if (isApex)
         {
-            apexScale = 2.0f;
+            currentScale = 2.0f; // Apex is always 2x scale
             float hpPct = Health / (float)MaxHealth;
-            if (hpPct > 0.8f) isRaider = true;
-            else if (hpPct > 0.6f) isFlicker = true;
-            else if (hpPct > 0.4f) isVortex = true;
-            else isBrimstalker = true;
+            
+            string stage = "stage1";
+            if (hpPct <= 0.4f) { stage = "stage4"; isBrimstalker = true; }
+            else if (hpPct <= 0.6f) { stage = "stage3"; isVortex = true; }
+            else if (hpPct <= 0.8f) { stage = "stage2"; isFlicker = true; }
+            else { stage = "stage1"; isRaider = true; }
+
+            Texture2D mobTex = AssetManager.GetTexture($"apex_{stage}");
+            if (mobTex.Id != 0)
+            {
+                Rectangle mobSource = new Rectangle(0, 0, mobTex.Width, mobTex.Height);
+                Raylib.DrawTexturePro(mobTex, mobSource, new Rectangle(center.X, center.Y, 96 * currentScale, 96 * currentScale), new Vector2(48 * currentScale, 48 * currentScale), 0f, Color.White);
+            }
         }
-
-        float currentScale = 1.0f;
-        if (isFlicker) currentScale = 0.5f; // Flicker is 50% smaller
-        if (isApex) currentScale = apexScale;
-
-        if (isRaider || isBrimstalker || isFlicker || isVortex)
+        else if (isRaider || isBrimstalker || isFlicker || isVortex)
         {
+            if (isFlicker) currentScale = 0.5f; // Flicker is 50% smaller
             string texPrefix = isFlicker ? "flicker" : (isRaider ? "raidshroomer" : (isBrimstalker ? "brimstalker" : "vortex"));
             string mobTexKey = $"{texPrefix}_idle"; // Default to idle
             

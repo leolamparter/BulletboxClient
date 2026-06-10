@@ -104,6 +104,9 @@ public class RaiderBot
     public float ChargeCooldown = 15f; // Initial delay
     public Vector2 ChargeDirection = Vector2.Zero;
     public bool HasDealtChargeDamage = false;
+    // NEW: Apex-specific fields
+    public bool HasTriggeredStage3Intro = false;
+    public float ApexTeleportTimer = 0f;
     public Dimension Dimension = Dimension.Overworld;
     public RaiderBot(string name, Vector2 pos) { Name = name; Position = pos; }
 }
