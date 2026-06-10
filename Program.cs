@@ -1,17 +1,18 @@
-﻿﻿﻿﻿using Raylib_cs;
+﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
 using System.IO;
-using BulletboxClient;
+using BulletboxClient; // Ensure this is present for WorldData
 using DiscordRPC;
 
-public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, ADD_ONS, DISCONNECTED, DEATH, ADVANCEMENTS }
+public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, ADD_ONS, DISCONNECTED, DEATH, ADVANCEMENTS, WORLD_SELECTION, CREATE_WORLD, VERSION_WARNING }
 
 class Program
 {
-    public const string VERSION = "Bulletbox 26.1 Pre-Release 1";
+    public const string VERSION = "Bulletbox 26.1 Pre-Release 3";
     public static GameState CurrentState = GameState.SPLASH;
-    public static UserData CurrentUser = new UserData(); 
+    public static UserData CurrentUser = new UserData();
+    public static WorldData? CurrentWorldData; // To store the currently loaded world's data
     
     public static Connection Net = new Connection();
     public static Playing? PlayingState; // Made nullable to resolve CS8618
@@ -43,6 +44,7 @@ class Program
 
     public static PauseMenu? pauseMenu;
     public static GameState cameFrom = GameState.HOME;
+    public static bool ShowVersionWarning = false;
 
     static void Main()
     {
@@ -117,6 +119,8 @@ class Program
         OptionsScreen optionsScreen = new OptionsScreen();
         DisconnectedScreen disconnectedScreen = new DisconnectedScreen();
         DeathScreen deathScreen = new DeathScreen();
+        WorldSelectionScreen worldSelectionScreen = new WorldSelectionScreen();
+        CreateWorldScreen createWorldScreen = new CreateWorldScreen();
 
         // Load Background Soundtracks early for UI support
         for (int i = 1; i <= 6; i++) AudioManager.LoadSound($"calm_{i}", $"resources/soundtracks/calm/{i}.mp3");
@@ -191,7 +195,7 @@ class Program
                 case GameState.LOGIN:
                     loginScreen.Update(windowResizedThisFrame);
                     if (CurrentUser.HasLoggedIn) CurrentState = GameState.HOME;
-                    break;
+                    break; // Removed redundant CurrentState = GameState.HOME;
                 case GameState.PLAYING:
                     // Safety: Ensure PlayingState is initialized regardless of how we entered the state
                     if (PlayingState == null)
@@ -204,7 +208,7 @@ class Program
                         DisconnectAndLeave(GameState.DISCONNECTED);
                         break;
                     }
-                    // Always update playing state so networking/health packets process
+                    // Always update playing state so networking/health packets process, even if paused
                     PlayingState.Update(Raylib.GetFrameTime(), windowResizedThisFrame);
 
                     if (IsPaused) pauseMenu.Update(windowResizedThisFrame);
@@ -236,6 +240,36 @@ class Program
                     break;
                 case GameState.DEATH:
                     deathScreen.Update(windowResizedThisFrame);
+                    break;
+                case GameState.WORLD_SELECTION:
+                    worldSelectionScreen.Update(windowResizedThisFrame);
+                    break;
+                case GameState.CREATE_WORLD:
+                    createWorldScreen.Update(windowResizedThisFrame);
+                    break;
+                case GameState.VERSION_WARNING:
+                    // Handle button clicks for the warning screen
+                    int sw = Raylib.GetScreenWidth();
+                    int sh = Raylib.GetScreenHeight();
+                    UIButton backBtn = new UIButton("Back", new Vector2(sw / 2 - 100, sh / 2 + 50), 25);
+                    UIButton proceedBtn = new UIButton("I know what I'm doing!", new Vector2(sw / 2 + 100, sh / 2 + 50), 25);
+
+                    if (backBtn.IsClicked())
+                    {
+                        DisconnectAndLeave(GameState.HOME); // Go back to home screen
+                        ShowVersionWarning = false;
+                    }
+                    if (proceedBtn.IsClicked())
+                    {
+                        // Update world version to current and proceed
+                        if (CurrentWorldData != null)
+                        {
+                            CurrentWorldData.Version = Program.VERSION;
+                            ServerProgram.SaveGame(); // Save the updated version
+                        }
+                        ShowVersionWarning = false;
+                        CurrentState = GameState.SINGLEPLAYER_CONNECTING; // Re-attempt connection, this time without warning
+                    }
                     break;
             }
 
@@ -278,7 +312,8 @@ class Program
                     addOnsScreen.Draw();
                     break;
                 case GameState.ADVANCEMENTS:
-                    HomeScreen.background.Draw();
+                    if (cameFrom == GameState.PLAYING) PlayingState?.Draw();
+                    else HomeScreen.background.Draw();
                     advancementsScreen.Draw();
                     break;
                 case GameState.DISCONNECTED:
@@ -286,6 +321,28 @@ class Program
                     break;
                 case GameState.DEATH:
                     deathScreen.Draw();
+                    break;
+                case GameState.WORLD_SELECTION:
+                    worldSelectionScreen.Draw();
+                    break;
+                case GameState.CREATE_WORLD:
+                    createWorldScreen.Draw();
+                    break;
+                case GameState.VERSION_WARNING:
+                    HomeScreen.background.Draw(); // Draw background
+                    int sw = Raylib.GetScreenWidth();
+                    int sh = Raylib.GetScreenHeight();
+                    Raylib.DrawRectangle(0, 0, sw, sh, new Color(0, 0, 0, 180)); // Dark overlay
+
+                    string warningText1 = "This world is saved on a different version of Bulletbox.";
+                    string warningText2 = "We recommend making a backup before playing on this world.";
+                    int textWidth1 = Raylib.MeasureText(warningText1, 30);
+                    int textWidth2 = Raylib.MeasureText(warningText2, 25);
+
+                    Raylib.DrawText(warningText1, sw / 2 - textWidth1 / 2, sh / 2 - 50, 30, Color.Red);
+                    Raylib.DrawText(warningText2, sw / 2 - textWidth2 / 2, sh / 2 - 10, 25, Color.Yellow);
+                    new UIButton("Back", new Vector2(sw / 2 - 100, sh / 2 + 50), 25).Draw();
+                    new UIButton("I know what I'm doing!", new Vector2(sw / 2 + 100, sh / 2 + 50), 25).Draw();
                     break;
             }
 
@@ -300,7 +357,7 @@ class Program
         }
 
         // Call this when the game closes
-        if (LastIP == "127.0.0.1") ServerProgram.SaveGame();
+        if (LastIP == "127.0.0.1" && CurrentWorldData != null) ServerProgram.SaveGame();
         SaveManager.Save(CurrentUser);
         AudioManager.UnloadAll();
         Raylib.CloseAudioDevice();
@@ -387,7 +444,7 @@ class Program
 
     public static void DisconnectAndLeave(GameState targetState = GameState.HOME)
     {
-        if (LastIP == "127.0.0.1") ServerProgram.SaveGame(); // Save on disconnect for single-player
+        if (LastIP == "127.0.0.1" && CurrentWorldData != null) ServerProgram.SaveGame(); // Save on disconnect for single-player
         Net.Disconnect();
         LanDiscovery.StopListening();
         LanDiscovery.StopBroadcasting();

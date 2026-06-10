@@ -10,6 +10,7 @@ public class PauseMenu
     {
         buttons.Add(new UIButton("BACK TO GAME", Vector2.Zero, 30, true));
         buttons.Add(new UIButton("OPTIONS", Vector2.Zero, 30));
+        buttons.Add(new UIButton("ADVANCEMENTS", Vector2.Zero, 30));
         buttons.Add(new UIButton("SAVE & QUIT", Vector2.Zero, 30));
     }
 
@@ -29,7 +30,11 @@ public class PauseMenu
                     Program.cameFrom = GameState.PLAYING;
                     Program.CurrentState = GameState.OPTIONS;
                 }
-                if (i == 2) Program.DisconnectAndLeave();
+                if (i == 2) {
+                    Program.cameFrom = GameState.PLAYING;
+                    Program.CurrentState = GameState.ADVANCEMENTS;
+                }
+                if (i == 3) Program.DisconnectAndLeave();
             }
         }
     }

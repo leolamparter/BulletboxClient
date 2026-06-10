@@ -90,8 +90,6 @@ public class InventoryUI {
             // Define local variables for layout calculation, similar to Draw()
             int sw = Raylib.GetScreenWidth();
             int sh = Raylib.GetScreenHeight();
-            float size = 64; // Match Hotbar size (64x64)
-            float pad = 0;
             float startY = (float)Math.Floor(sh / 2f - 100f);
 
             int totalCraftableRecipesHeight = 0;

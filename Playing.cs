@@ -103,6 +103,15 @@ public class Playing
     public Dictionary<(int, int), Structure> Structures = new(); 
     private HealthBar healthBar = new HealthBar();
 
+    public bool CheatsEnabled { get; private set; }
+    // World-Specific Advancement Tracking
+    public HashSet<string> WorldAdvancements = new();
+    public HashSet<byte> WorldVisitedBiomes = new();
+    public HashSet<string> WorldKilledOverworld = new();
+    public int WorldTotalMobsKilled = 0;
+    public int WorldTotalQuartzObtained = 0;
+    public int WorldTotalRaidshroomsObtained = 0;
+
     // Environmental Systems
     public WorldEnvironment Env = new WorldEnvironment();
     private Shader _lightShader;
@@ -246,6 +255,8 @@ public class Playing
         InitializeWeatherParticles();
 
         // Initial shader uniform setup
+        CheatsEnabled = Program.CurrentWorldData?.CheatsEnabled ?? false; // Initialize cheats from world data
+
         Raylib.SetShaderValue(_lightShader, Raylib.GetShaderLocation(_lightShader, "screenResolution"), 
             new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), ShaderUniformDataType.Vec2);
 
@@ -573,10 +584,27 @@ public class Playing
         _needsCacheClear = true;
     }
 
-    public void TriggerAdvancementPopup(string key)
+    public void GrantAdvancement(string key, bool showPopup = true)
     {
-        // This prevents popups for advancements achieved in previous sessions.
-        if (IsAdvancementAlreadyCompleted(key)) return;
+        if (WorldAdvancements.Contains(key)) return;
+        WorldAdvancements.Add(key);
+
+        // Parse progress-based data from the keys sent by the server
+        if (key.StartsWith("EnterBiome:")) {
+            if (byte.TryParse(key.Split(':')[1], out byte b)) WorldVisitedBiomes.Add(b);
+        }
+        else if (key.StartsWith("Kill:")) {
+            WorldKilledOverworld.Add(key.Split(':')[1]);
+        }
+        else if (key == "FirstBlood") WorldTotalMobsKilled = Math.Max(WorldTotalMobsKilled, 1);
+        else if (key == "GettingStronger") WorldTotalMobsKilled = Math.Max(WorldTotalMobsKilled, 25);
+        else if (key == "EnoughCrystalsAlready") WorldTotalQuartzObtained = Math.Max(WorldTotalQuartzObtained, 20);
+        else if (key == "ThatsEnoughCrystalsNo") WorldTotalQuartzObtained = Math.Max(WorldTotalQuartzObtained, 99);
+        else if (key == "StopItWithTheCrystals") WorldTotalQuartzObtained = Math.Max(WorldTotalQuartzObtained, 198);
+        else if (key == "ImHungry") WorldTotalRaidshroomsObtained = Math.Max(WorldTotalRaidshroomsObtained, 20);
+        else if (key == "FOOOOOOOOOOD") WorldTotalRaidshroomsObtained = Math.Max(WorldTotalRaidshroomsObtained, 99);
+
+        if (!showPopup) return;
 
         var adv = AdvancementsScreen.AllAdvancements.FirstOrDefault(a => a.Key == key);
         if (!string.IsNullOrEmpty(adv.Title))
@@ -585,30 +613,13 @@ public class Playing
         }
     }
 
+    public void TriggerAdvancementPopup(string key) => GrantAdvancement(key, true);
+
     private bool IsAdvancementAlreadyCompleted(string key)
     {
-        if (Program.CurrentUser == null) return false;
-
-        // Handle special advancements that are not simple boolean flags in the Advancements dictionary.
-        if (key == "EnterAllBiomes")
-        {
-            return Program.CurrentUser.VisitedBiomes.Count >= 10;
-        }
-        else if (key == "KillAllOverworld")
-        {
-            return Program.CurrentUser.KilledOverworld.Count >= 4;
-        }
-        else if (key == "GettingStronger")
-        {
-            return Program.CurrentUser.KilledOverworld.Count >= 25;
-        }
-        else if (key == "EnoughCrystalsAlready") return (Program.CurrentUser as dynamic).TotalQuartzObtained >= 20;
-        else if (key == "ThatsEnoughCrystalsNo") return (Program.CurrentUser as dynamic).TotalQuartzObtained >= 99;
-        else if (key == "StopItWithTheCrystals") return (Program.CurrentUser as dynamic).TotalQuartzObtained >= 198;
-        // For all other advancements, check if the key exists in the Advancements dictionary.
-        return Program.CurrentUser.Advancements.ContainsKey(key);
+        return WorldAdvancements.Contains(key);
     }
-
+    
     private void UpdatePopups(float dt)
     {
         for (int i = _activePopups.Count - 1; i >= 0; i--)
@@ -1363,21 +1374,33 @@ public class Playing
                             AddChatMessage("SYSTEM", $"Time set to {Env.CurrentTime:F1}s");
                         }
                     }
-                else if (_chatInput.StartsWith("giveitem:"))
-                {
-                    Program.Net.SendChat(_chatInput);
-                }
-                    else if (_chatInput.Equals("superspeed", StringComparison.OrdinalIgnoreCase))
+                    else if (CheatsEnabled) // Only allow these commands if cheats are enabled
                     {
-                        _playerBaseSpeed = 3500f; // Make player super fast
-                        _isSuperSpeedActive = true;
-                        AddChatMessage("SYSTEM", "Superspeed activated!");
-                    }
-                    else if (_chatInput.Equals("normalspeed", StringComparison.OrdinalIgnoreCase))
-                    {
-                        _playerBaseSpeed = 350f; // Revert to normal speed
-                        _isSuperSpeedActive = false;
-                        AddChatMessage("SYSTEM", "Normal speed restored.");
+                        if (_chatInput.StartsWith("giveitem:"))
+                        {
+                            Program.Net.SendChat(_chatInput);
+                        }
+                        else if (_chatInput.Equals("superspeed", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _playerBaseSpeed = 3500f; // Make player super fast
+                            _isSuperSpeedActive = true;
+                            AddChatMessage("SYSTEM", "Superspeed activated!");
+                        }
+                        else if (_chatInput.Equals("normalspeed", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _playerBaseSpeed = 350f; // Revert to normal speed
+                            _isSuperSpeedActive = false;
+                            AddChatMessage("SYSTEM", "Normal speed restored.");
+                        }
+                        else if (_chatInput.Equals("overworld", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Program.Net.SendChat("/teleport 0 0 0"); // Assuming this teleports to overworld spawn
+                            AddChatMessage("SYSTEM", "Teleporting to Overworld spawn.");
+                        }
+                        else
+                        {
+                            Program.Net.SendChat(_chatInput);
+                        }
                     }
                     else
                     {

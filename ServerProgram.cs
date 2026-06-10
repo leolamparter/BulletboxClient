@@ -21,7 +21,8 @@ public class ServerProgram
     private static float _flickerSpawnTimer = 0f;
     private static float _autoSaveTimer = 0f;
 
-    private const string SinglePlayerSavePath = "singleplayer_save.json";
+    public static string ActiveWorldName = "default";
+    private static string GetSavePath() => Path.Combine("saves", $"{ActiveWorldName}.json");
     private static readonly object _connectedPlayersLock = new object(); // Lock for ConnectedPlayers
     public static readonly Dictionary<string, PlayerSaveData> LoadedPlayers = new(); // Holds player data by username after loading
 
@@ -33,6 +34,8 @@ public class ServerProgram
         Random rand = new Random();
 
         TcpListener listener = new TcpListener(IPAddress.Any, 32308); // Listener for incoming client connections
+        if (!Directory.Exists("saves")) Directory.CreateDirectory("saves");
+
         listener.Start(); // Start listening for client connections
         Console.WriteLine("[Integrated Server] Started on 32308...");
 
@@ -1256,12 +1259,12 @@ public class ServerProgram
         saveData.ActiveRaidOutpostPosition = BulletboxWorld.ActiveRaidOutpostPosition;
 
         try {
-            string jsonString = JsonSerializer.Serialize(saveData, new JsonSerializerOptions { 
+            string jsonString = JsonSerializer.Serialize(saveData, new JsonSerializerOptions {
                 WriteIndented = true, 
                 IncludeFields = true,
                 NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals // Allow NaN/Infinity
             });
-            File.WriteAllText(SinglePlayerSavePath, jsonString);
+            File.WriteAllText(GetSavePath(), jsonString);
             Console.WriteLine("[Server] Game state saved successfully.");
         } catch (Exception ex) {
             Console.WriteLine($"[Server] Error saving game state: {ex.Message}");
@@ -1269,11 +1272,12 @@ public class ServerProgram
     }
 
     public static bool LoadGame() {
-        if (!File.Exists(SinglePlayerSavePath)) return false;
+        string path = GetSavePath();
+        if (!File.Exists(path)) return false;
 
         Console.WriteLine("[Server] Loading game state...");
         try {
-            string jsonString = File.ReadAllText(SinglePlayerSavePath);
+            string jsonString = File.ReadAllText(path);
             WorldSaveData? saveData = JsonSerializer.Deserialize<WorldSaveData>(jsonString, new JsonSerializerOptions { IncludeFields = true });
             if (saveData == null) return false;
 

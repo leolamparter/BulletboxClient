@@ -37,11 +37,7 @@ public class HomeScreen
                 string text = buttons[i].Text;
                 if (text == "SINGLEPLAYER") 
                 {
-                    Program.TriggerSplash(GameState.SINGLEPLAYER_CONNECTING, () => {
-                        if (Program.PlayingState == null) {
-                            Program.PlayingState = new Playing(string.IsNullOrEmpty(Program.CurrentUser.Username) ? "Player" : Program.CurrentUser.Username);
-                        }
-                    });
+                    Program.CurrentState = GameState.WORLD_SELECTION;
                 }
                 else if (text == "ADD-ONS") {
                     Program.CurrentState = GameState.ADD_ONS;

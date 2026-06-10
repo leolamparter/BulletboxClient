@@ -70,7 +70,7 @@ public class AdvancementsScreen
         HomeScreen.background.Update(resized);
 
         if (Raylib.IsKeyPressed(KeyboardKey.Escape) || backButton.IsClicked())
-            Program.CurrentState = GameState.HOME;
+            Program.CurrentState = Program.cameFrom == GameState.PLAYING ? GameState.PLAYING : GameState.HOME;
 
         // Handle scrolling
         float mouseWheelMove = Raylib.GetMouseWheelMove();
@@ -102,11 +102,14 @@ public class AdvancementsScreen
         int sw = Raylib.GetScreenWidth();
         int sh = Raylib.GetScreenHeight();
         string title = "ADVANCEMENTS";
+        bool isWorldView = Program.cameFrom == GameState.PLAYING && Program.PlayingState != null;
+        
+        if (isWorldView) title = "WORLD ADVANCEMENTS";
 
         int titleW = Raylib.MeasureText(title, 40);
         Raylib.DrawText(title, sw / 2 - titleW / 2, 40, 40, Color.Gold);
 
-        string sub = "Scroll to view all advancements.";
+        string sub = isWorldView ? "Viewing progress for this world only." : "Scroll to view all advancements.";
         int subW = Raylib.MeasureText(sub, 20);
         Raylib.DrawText(sub, sw / 2 - subW / 2, 85, 20, Color.Gray);
 
@@ -128,38 +131,98 @@ public class AdvancementsScreen
             // Check advancement status from the user data dictionary
             try
             {
-                if (adv.Key == "EnterAllBiomes")
+                if (isWorldView)
                 {
-                    completed = (Program.CurrentUser as dynamic).VisitedBiomes.Count >= 10;
-                    if (!completed) statusChar = $"{(Program.CurrentUser as dynamic).VisitedBiomes.Count}/10";
-                }
-                else if (adv.Key == "KillAllOverworld")
-                {
-                    completed = (Program.CurrentUser as dynamic).KilledOverworld.Count >= 4;
-                    if (!completed) statusChar = $"{(Program.CurrentUser as dynamic).KilledOverworld.Count}/4";
-                }
-                else if (adv.Key == "GettingStronger")
-                {
-                    completed = (Program.CurrentUser as dynamic).TotalMobsKilled >= 25;
-                    if (!completed) statusChar = $"{(Program.CurrentUser as dynamic).TotalMobsKilled}/25";
-                }
-                else if (adv.Key == "EnoughCrystalsAlready")
-                {
-                    completed = (Program.CurrentUser as dynamic).TotalQuartzObtained >= 20;
-                    if (!completed) statusChar = $"{(Program.CurrentUser as dynamic).TotalQuartzObtained}/20";
-                }
-                else if (adv.Key == "ThatsEnoughCrystalsNo")
-                {
-                    completed = (Program.CurrentUser as dynamic).TotalQuartzObtained >= 99;
-                    if (!completed) statusChar = $"{(Program.CurrentUser as dynamic).TotalQuartzObtained}/99";
-                }
-                else if (adv.Key == "StopItWithTheCrystals")
-                {
-                    completed = (Program.CurrentUser as dynamic).TotalQuartzObtained >= 198;
-                    if (!completed) statusChar = $"{(Program.CurrentUser as dynamic).TotalQuartzObtained}/198";
+                    var ps = Program.PlayingState!;
+                    completed = ps.WorldAdvancements.Contains(adv.Key);
+
+                    if (!completed && adv.Key == "EnterAllBiomes")
+                    {
+                        completed = ps.WorldVisitedBiomes.Count >= 10;
+                        if (!completed) statusChar = $"{ps.WorldVisitedBiomes.Count}/10";
+                    }
+                    else if (!completed && adv.Key == "KillAllOverworld")
+                    {
+                        completed = ps.WorldKilledOverworld.Count >= 4;
+                        if (!completed) statusChar = $"{ps.WorldKilledOverworld.Count}/4";
+                    }
+                    else if (!completed && adv.Key == "GettingStronger")
+                    {
+                        completed = ps.WorldTotalMobsKilled >= 25;
+                        if (!completed) statusChar = $"{ps.WorldTotalMobsKilled}/25";
+                    }
+                    else if (!completed && adv.Key == "EnoughCrystalsAlready")
+                    {
+                        completed = ps.WorldTotalQuartzObtained >= 20;
+                        if (!completed) statusChar = $"{ps.WorldTotalQuartzObtained}/20";
+                    }
+                    else if (!completed && adv.Key == "ThatsEnoughCrystalsNo")
+                    {
+                        completed = ps.WorldTotalQuartzObtained >= 99;
+                        if (!completed) statusChar = $"{ps.WorldTotalQuartzObtained}/99";
+                    }
+                    else if (!completed && adv.Key == "StopItWithTheCrystals")
+                    {
+                        completed = ps.WorldTotalQuartzObtained >= 198;
+                        if (!completed) statusChar = $"{ps.WorldTotalQuartzObtained}/198";
+                    }
+                    else if (!completed && adv.Key == "ImHungry")
+                    {
+                        completed = ps.WorldTotalRaidshroomsObtained >= 20;
+                        if (!completed) statusChar = $"{ps.WorldTotalRaidshroomsObtained}/20";
+                    }
+                    else if (!completed && adv.Key == "FOOOOOOOOOOD")
+                    {
+                        completed = ps.WorldTotalRaidshroomsObtained >= 99;
+                        if (!completed) statusChar = $"{ps.WorldTotalRaidshroomsObtained}/99";
+                    }
                 }
                 else
-                    completed = (Program.CurrentUser as dynamic).Advancements.ContainsKey(adv.Key);
+                {
+                    var user = (dynamic)Program.CurrentUser;
+                    completed = user.Advancements.ContainsKey(adv.Key);
+
+                    if (!completed && adv.Key == "EnterAllBiomes")
+                    {
+                        completed = user.VisitedBiomes.Count >= 10;
+                        if (!completed) statusChar = $"{user.VisitedBiomes.Count}/10";
+                    }
+                    else if (!completed && adv.Key == "KillAllOverworld")
+                    {
+                        completed = user.KilledOverworld.Count >= 4;
+                        if (!completed) statusChar = $"{user.KilledOverworld.Count}/4";
+                    }
+                    else if (!completed && adv.Key == "GettingStronger")
+                    {
+                        completed = user.TotalMobsKilled >= 25;
+                        if (!completed) statusChar = $"{user.TotalMobsKilled}/25";
+                    }
+                    else if (!completed && adv.Key == "EnoughCrystalsAlready")
+                    {
+                        completed = user.TotalQuartzObtained >= 20;
+                        if (!completed) statusChar = $"{user.TotalQuartzObtained}/20";
+                    }
+                    else if (!completed && adv.Key == "ThatsEnoughCrystalsNo")
+                    {
+                        completed = user.TotalQuartzObtained >= 99;
+                        if (!completed) statusChar = $"{user.TotalQuartzObtained}/99";
+                    }
+                    else if (!completed && adv.Key == "StopItWithTheCrystals")
+                    {
+                        completed = user.TotalQuartzObtained >= 198;
+                        if (!completed) statusChar = $"{user.TotalQuartzObtained}/198";
+                    }
+                    else if (!completed && adv.Key == "ImHungry")
+                    {
+                        completed = user.TotalRaidshroomsObtained >= 20;
+                        if (!completed) statusChar = $"{user.TotalRaidshroomsObtained}/20";
+                    }
+                    else if (!completed && adv.Key == "FOOOOOOOOOOD")
+                    {
+                        completed = user.TotalRaidshroomsObtained >= 99;
+                        if (!completed) statusChar = $"{user.TotalRaidshroomsObtained}/99";
+                    }
+                }
 
                 if (completed) statusChar = "DONE!";
             }
