@@ -1,4 +1,4 @@
-﻿﻿using Raylib_cs;
+﻿﻿﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
 using System.IO;
@@ -159,6 +159,7 @@ class Program
             windowResizedThisFrame = Raylib.IsWindowResized();
 
             // --- UPDATE ---
+            GameState stateBeforeUpdate = CurrentState;
             switch (CurrentState)
             {
                 case GameState.SPLASH:
@@ -168,7 +169,11 @@ class Program
                     homeScreen.Update(windowResizedThisFrame);
                     break;
                 case GameState.SINGLEPLAYER_CONNECTING:
-                    if (!ServerProgram.IsRunning) _ = ServerProgram.RunServerAsync(); // This should probably be awaitaed or handled differently for proper server startup
+                    if (!ServerProgram.IsRunning) 
+                    {
+                        ServerProgram.ResetServerState(); // Reset FIRST on main thread
+                        _ = ServerProgram.RunServerAsync(); 
+                    }
                     homeScreen.Update(windowResizedThisFrame); // Update background
                     if (!ServerProgram.BulletboxWorld.IsLoaded) // Check if world is already loaded
                     {
@@ -216,7 +221,7 @@ class Program
                     if (PlayingState != null && PlayingState.CurrentHealth <= 0) 
                     {
                         AudioManager.StopAll();
-                        if (LastIP == "127.0.0.1") ServerProgram.SaveGame(); // Save on death for single-player
+                        if (LastIP == "127.0.0.1") _ = ServerProgram.SaveGameAsync(); // Save on death for single-player
                         AudioManager.PlaySound("player_death");
                         Program.DisconnectAndLeave(GameState.DEATH);
                     }
@@ -265,12 +270,17 @@ class Program
                         if (CurrentWorldData != null)
                         {
                             CurrentWorldData.Version = Program.VERSION;
-                            ServerProgram.SaveGame(); // Save the updated version
+                            _ = ServerProgram.SaveGameAsync(); // Save the updated version
                         }
                         ShowVersionWarning = false;
                         CurrentState = GameState.SINGLEPLAYER_CONNECTING; // Re-attempt connection, this time without warning
                     }
                     break;
+            }
+
+            if (stateBeforeUpdate != CurrentState && CurrentState == GameState.WORLD_SELECTION)
+            {
+                worldSelectionScreen.RefreshWorldList();
             }
 
             UpdateGlobalMusic();
@@ -357,7 +367,8 @@ class Program
         }
 
         // Call this when the game closes
-        if (LastIP == "127.0.0.1" && CurrentWorldData != null) ServerProgram.SaveGame();
+        ServerProgram.IsRunning = false; // Stop the server tick loop
+        if (LastIP == "127.0.0.1" && CurrentWorldData != null) ServerProgram.SaveGameAsync().GetAwaiter().GetResult();
         SaveManager.Save(CurrentUser);
         AudioManager.UnloadAll();
         Raylib.CloseAudioDevice();
@@ -444,10 +455,16 @@ class Program
 
     public static void DisconnectAndLeave(GameState targetState = GameState.HOME)
     {
-        if (LastIP == "127.0.0.1" && CurrentWorldData != null) ServerProgram.SaveGame(); // Save on disconnect for single-player
+        if (LastIP == "127.0.0.1" && CurrentWorldData != null) 
+        {
+            // BLOCKING save to ensure data hits SQLite before we wipe the server memory
+            ServerProgram.SaveGameAsync().GetAwaiter().GetResult();
+            ServerProgram.ResetServerState();
+        }
         Net.Disconnect();
         LanDiscovery.StopListening();
         LanDiscovery.StopBroadcasting();
+        CurrentWorldData = null; // Clear world metadata so next session is fresh
         ServerProgram.IsRunning = false;
         PlayingState = null;   
         IsPaused = false;

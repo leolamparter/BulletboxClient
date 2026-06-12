@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="DiscordRichPresence" Version="1.6.1.70" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
     <PackageReference Include="Raylib-cs" Version="7.0.2" />
   </ItemGroup>
 

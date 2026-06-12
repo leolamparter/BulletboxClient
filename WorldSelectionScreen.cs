@@ -24,12 +24,13 @@ namespace BulletboxClient
             RefreshWorldList();
         }
 
-        private void RefreshWorldList()
+        public void RefreshWorldList()
         {
             _worldNames.Clear();
             if (!Directory.Exists("saves")) Directory.CreateDirectory("saves");
             
-            var files = Directory.GetFiles("saves", "*.json");
+            // Filter for .db files and ignore the global metadata database
+            var files = Directory.GetFiles("saves", "*.db").Where(f => !f.EndsWith("global_metadata.db"));
             foreach (var file in files)
             {
                 _worldNames.Add(Path.GetFileNameWithoutExtension(file));
@@ -93,7 +94,12 @@ namespace BulletboxClient
                 {
                     if (playBtn.IsClicked())
                     {
-                        ServerProgram.ActiveWorldName = name;
+                        // CRITICAL: Update the global world data so the server opens the right .db file
+                        Program.CurrentWorldData = new WorldData
+                        {
+                            WorldName = name,
+                            Version = Program.VERSION // Assume current version for existing loads
+                        };
                         Program.LastIP = "127.0.0.1";
                         Program.CurrentState = GameState.SINGLEPLAYER_CONNECTING;
                     }
@@ -134,7 +140,7 @@ namespace BulletboxClient
 
             if (confirmBtn.IsClicked())
             {
-                string path = Path.Combine("saves", $"{_pendingDelete}.json");
+                string path = Path.Combine("saves", $"{_pendingDelete}.db");
                 if (File.Exists(path)) File.Delete(path);
                 _isConfirmingDelete = false;
                 RefreshWorldList();

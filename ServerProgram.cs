@@ -5,10 +5,11 @@ using System.Net.Sockets;
 using System.Threading.Tasks;
 using System.Numerics;
 using System.Diagnostics;
+using System.IO;
 
 using System.Text.Json;
 using System.Linq;
-using System.IO;
+using Microsoft.Data.Sqlite; // New: Using SQLite namespace
 
 public class ServerProgram
 {
@@ -21,10 +22,18 @@ public class ServerProgram
     private static float _flickerSpawnTimer = 0f;
     private static float _autoSaveTimer = 0f;
 
-    public static string ActiveWorldName = "default";
-    private static string GetSavePath() => Path.Combine("saves", $"{ActiveWorldName}.json");
+    // Use a property to ensure the server ALWAYS uses the correct world file name from the UI
+    public static string ActiveWorldName => Program.CurrentWorldData?.WorldName ?? "default";
+    private static string GetDatabasePath() 
+    {
+        if (!Directory.Exists("saves")) Directory.CreateDirectory("saves");
+        return Path.Combine("saves", $"{ActiveWorldName}.db");
+    }
+
     private static readonly object _connectedPlayersLock = new object(); // Lock for ConnectedPlayers
-    public static readonly Dictionary<string, PlayerSaveData> LoadedPlayers = new(); // Holds player data by username after loading
+    public static readonly Dictionary<string, PlayerSaveData> LoadedPlayers = new(StringComparer.OrdinalIgnoreCase); // Holds player data by username after loading
+
+    private static TcpListener? _listener;
 
     public static async Task RunServerAsync()
     {
@@ -32,11 +41,12 @@ public class ServerProgram
         IsRunning = true;
 
         Random rand = new Random();
-
-        TcpListener listener = new TcpListener(IPAddress.Any, 32308); // Listener for incoming client connections
+        
+        InitializeDatabase(); // NEW: Initialize the database at server startup
+        _listener = new TcpListener(IPAddress.Any, 32308); 
         if (!Directory.Exists("saves")) Directory.CreateDirectory("saves");
 
-        listener.Start(); // Start listening for client connections
+        _listener.Start(); 
         Console.WriteLine("[Integrated Server] Started on 32308...");
 
         _ = Task.Run(async () => {
@@ -52,7 +62,7 @@ public class ServerProgram
 
                 _autoSaveTimer += dt;
                 if (_autoSaveTimer >= 30f) { // Save every 30 seconds
-                    SaveGame();
+                    _ = SaveGameAsync();
                     _autoSaveTimer = 0f;
                 }
 
@@ -410,8 +420,8 @@ public class ServerProgram
         // Client connection acceptance loop
         try {
             while (IsRunning) {
-                if (!listener.Pending()) { await Task.Delay(100); continue; }
-                TcpClient clientSocket = await listener.AcceptTcpClientAsync();
+                if (_listener == null || !_listener.Pending()) { await Task.Delay(100); continue; }
+                TcpClient clientSocket = await _listener.AcceptTcpClientAsync();
                 
                 ServerPlayer newPlayer = new ServerPlayer(clientSocket);
                 lock(_connectedPlayersLock) { ConnectedPlayers.Add(newPlayer); }
@@ -454,7 +464,7 @@ public class ServerProgram
             }
         }
         catch (Exception ex) { Console.WriteLine($"[Server] Error: {ex.Message}"); }
-        finally { listener.Stop(); IsRunning = false; }
+        finally { _listener?.Stop(); _listener = null; IsRunning = false; }
     }
 
     private static void SpawnBrimstalker(Vector2 pos, Random rand)
@@ -1169,7 +1179,7 @@ public class ServerProgram
                             p.Writer.Write(bot.Position.X);
                             p.Writer.Write(bot.Position.Y); 
                             p.Writer.Write(bot.Rotation); 
-                            p.Writer.Write(bot.HeldItemID); 
+                            p.Writer.Write(bot.HeldItemID ?? "none"); 
                             p.Writer.Write("none");      // Bots have no offhand
                             p.Writer.Write(false);      // Bots don't block yet
                             p.Writer.Write(bot.Health);
@@ -1194,38 +1204,105 @@ public class ServerProgram
         Console.WriteLine("[Server] APEX Boss spawned in The End.");
     }
 
-    public static void SaveGame() {
-        if (!IsRunning || Program.LastIP != "127.0.0.1") return;
+    public static void ResetServerState()
+    {
+        Console.WriteLine("[Server] Wiping internal memory for fresh world state...");
+        IsRunning = false;
+        try {
+            _listener?.Stop();
+            _listener = null;
+        } catch {}
 
+        // Wipe all player caches
+        lock (_connectedPlayersLock)
+        {
+            ConnectedPlayers.Clear();
+        }
+        lock (LoadedPlayers)
+        {
+            LoadedPlayers.Clear();
+        }
+
+        // Destroy the old world object and its chunk/entity caches
+        BulletboxWorld = new ServerWorld();
+        _worldTime = 0f;
+        _flickerSpawnTimer = 0f;
+        _playerRegenTimer = 0f;
+        _autoSaveTimer = 0f;
+        _raidInitialTotalHealth = 0f;
+    }
+
+    private static void InitializeDatabase()
+    {
+        string dbPath = GetDatabasePath();
+        using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+        {
+            connection.Open();
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+                    CREATE TABLE IF NOT EXISTS WorldData (Key TEXT PRIMARY KEY, Value TEXT);
+                    CREATE TABLE IF NOT EXISTS PlayerData (
+                        Username TEXT PRIMARY KEY, Health INTEGER, MaxHealth INTEGER, Hunger INTEGER,
+                        PositionX REAL, PositionY REAL, Rotation REAL, IsBlocking INTEGER,
+                        CurrentDimension INTEGER, SelectedSlot INTEGER, AshenTime REAL, BrimstalkerCooldown REAL,
+                        Inventory TEXT, CraftingSlot1ItemID TEXT, CraftingSlot1Count INTEGER,
+                        CraftingSlot2ItemID TEXT, CraftingSlot2Count INTEGER, TimeInEndDimension REAL,
+                        TimeOnLava REAL, TotalMobsKilled INTEGER, TotalQuartzObtained INTEGER,
+                        TotalRaidshroomsObtained INTEGER, VisitedBiomes TEXT, KilledOverworld TEXT,
+                        TriggeredAdvancements TEXT
+                    );
+                    CREATE TABLE IF NOT EXISTS Raiders (Id INTEGER PRIMARY KEY AUTOINCREMENT, Data TEXT);
+                    CREATE TABLE IF NOT EXISTS Structures (PosKey TEXT PRIMARY KEY, Data TEXT);
+                    CREATE TABLE IF NOT EXISTS ActiveBombs (Data TEXT);
+                    CREATE TABLE IF NOT EXISTS ActiveGusts (Data TEXT);
+                ";
+                command.ExecuteNonQuery();
+            }
+        }
+    }
+
+    public static async Task SaveGameAsync() { // Save method updated for SQLite
+        // REMOVED !IsRunning check: It prevents saving during server shutdown!
+        if (Program.LastIP != "127.0.0.1") return;
+
+        WorldSaveData saveData = new WorldSaveData();
+
+        // 1. Snapshot Data (Brief Locking)
         lock (LoadedPlayers) {
+            // CRITICAL: Clear the connected player snapshot and rebuild it from the live players
+            // We don't clear the whole dictionary so that offline players stay in the save.
+            
             // Sync current online player data into the persistent dictionary cache
             foreach (var p in ConnectedPlayers) {
                 if (string.IsNullOrEmpty(p.Username)) continue;
 
-                LoadedPlayers[p.Username] = new PlayerSaveData {
+                lock (_connectedPlayersLock) {
+                    LoadedPlayers[p.Username] = new PlayerSaveData {
                     Username = p.Username, Health = p.Health, MaxHealth = p.MaxHealth,
                     Hunger = p.Hunger, TotalMobsKilled = p.TotalMobsKilled,
                     TotalQuartzObtained = p.TotalQuartzObtained,
                     TotalRaidshroomsObtained = p.TotalRaidshroomsObtained,
                     TimeInEndDimension = p.TimeInEndDimension, TimeOnLava = p.TimeOnLava,
-                    VisitedBiomes = p.VisitedBiomes, TriggeredAdvancements = p.TriggeredAdvancements,
-                    KilledOverworld = p.KilledOverworld,
+                    VisitedBiomes = new HashSet<BiomeType>(p.VisitedBiomes), 
+                    TriggeredAdvancements = new HashSet<string>(p.TriggeredAdvancements),
+                    KilledOverworld = new HashSet<string>(p.KilledOverworld),
                     Position = p.Position, Rotation = p.Rotation, IsBlocking = p.IsBlocking,
                     CurrentDimension = p.CurrentDimension, SelectedSlot = p.SelectedSlot, 
                     AshenTime = p.AshenTime, BrimstalkerCooldown = p.BrimstalkerCooldown,
                     Inventory = (ServerItemStack[])p.Inventory.Clone(), // Save a unique copy of the items
                     CraftingSlot1 = p.CraftingSlot1, CraftingSlot2 = p.CraftingSlot2
                 };
+                }
             }
         }
 
-        if (LoadedPlayers.Count == 0) return; // Protection: Don't overwrite if no players have ever joined
+        // Protection: Only skip saving if NO players (online or offline) are in the database cache
+        if (LoadedPlayers.Count == 0) return; 
 
-        Console.WriteLine("[Server] Saving game state...");
-        WorldSaveData saveData = new WorldSaveData();
         saveData.Seed = BulletboxWorld.Seed;
         
-        // Persist ALL known players (both online and offline)
+        // Persist ALL known players
         lock (LoadedPlayers) { saveData.Players.AddRange(LoadedPlayers.Values); }
 
         lock (BulletboxWorld.Raiders) {
@@ -1258,100 +1335,336 @@ public class ServerProgram
         saveData.RaidActive = BulletboxWorld.RaidActive;
         saveData.ActiveRaidOutpostPosition = BulletboxWorld.ActiveRaidOutpostPosition;
 
+        // 2. Perform Slow I/O Asynchronously
         try {
-            string jsonString = JsonSerializer.Serialize(saveData, new JsonSerializerOptions {
-                WriteIndented = true, 
-                IncludeFields = true,
-                NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals // Allow NaN/Infinity
-            });
-            File.WriteAllText(GetSavePath(), jsonString);
-            Console.WriteLine("[Server] Game state saved successfully.");
+            string dbPath = GetDatabasePath();
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                await connection.OpenAsync();
+
+                // Start a transaction for atomicity
+                using (var transaction = connection.BeginTransaction())
+                {
+                    // Save World Data
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = 
+                            @"INSERT OR REPLACE INTO WorldData (Key, Value) VALUES 
+                            ('Seed', @Seed), ('WorldTime', @WorldTime), ('FlickerSpawnTimer', @FlickerSpawnTimer),
+                            ('PlayerRegenTimer', @PlayerRegenTimer), ('RaidTimer', @RaidTimer), ('RaidActive', @RaidActive),
+                            ('ActiveRaidOutpostPositionX', @ActiveRaidOutpostPositionX), ('ActiveRaidOutpostPositionY', @ActiveRaidOutpostPositionY);";
+                        command.Parameters.AddWithValue("@Seed", saveData.Seed);
+                        command.Parameters.AddWithValue("@WorldTime", saveData.WorldTime);
+                        command.Parameters.AddWithValue("@FlickerSpawnTimer", saveData.FlickerSpawnTimer);
+                        command.Parameters.AddWithValue("@PlayerRegenTimer", saveData.PlayerRegenTimer);
+                        command.Parameters.AddWithValue("@RaidTimer", saveData.RaidTimer);
+                        command.Parameters.AddWithValue("@RaidActive", saveData.RaidActive);
+                        command.Parameters.AddWithValue("@ActiveRaidOutpostPositionX", saveData.ActiveRaidOutpostPosition?.X ?? (object)DBNull.Value);
+                        command.Parameters.AddWithValue("@ActiveRaidOutpostPositionY", saveData.ActiveRaidOutpostPosition?.Y ?? (object)DBNull.Value);
+                        command.Transaction = transaction;
+                        await command.ExecuteNonQueryAsync();
+                    }
+
+                    // Save Player Data (INSERT OR REPLACE based on Username)
+                    foreach (var pData in saveData.Players)
+                    {
+                        using (var command = connection.CreateCommand())
+                        {
+                            // For complex objects like Inventory, VisitedBiomes, TriggeredAdvancements,
+                            // you'd typically serialize them to JSON strings or create separate tables.
+                            // Here, we'll serialize Inventory as an example.
+                            string inventoryJson = JsonSerializer.Serialize(pData.Inventory);
+                            string visitedBiomesJson = JsonSerializer.Serialize(pData.VisitedBiomes);
+                            string triggeredAdvancementsJson = JsonSerializer.Serialize(pData.TriggeredAdvancements);
+                            string killedOverworldJson = JsonSerializer.Serialize(pData.KilledOverworld);
+
+                            command.CommandText =
+                                @"INSERT OR REPLACE INTO PlayerData (
+                                Username, Health, MaxHealth, Hunger, PositionX, PositionY, Rotation, IsBlocking, CurrentDimension, SelectedSlot,
+                                AshenTime, BrimstalkerCooldown, Inventory, CraftingSlot1ItemID, CraftingSlot1Count, CraftingSlot2ItemID, CraftingSlot2Count,
+                                TimeInEndDimension, TimeOnLava, TotalMobsKilled, TotalQuartzObtained, TotalRaidshroomsObtained,
+                                VisitedBiomes, KilledOverworld, TriggeredAdvancements
+                                ) VALUES (
+                                @Username, @Health, @MaxHealth, @Hunger, @PositionX, @PositionY, @Rotation, @IsBlocking, @CurrentDimension, @SelectedSlot,
+                                @AshenTime, @BrimstalkerCooldown, @Inventory, @CraftingSlot1ItemID, @CraftingSlot1Count, @CraftingSlot2ItemID, @CraftingSlot2Count,
+                                @TimeInEndDimension, @TimeOnLava, @TotalMobsKilled, @TotalQuartzObtained, @TotalRaidshroomsObtained,
+                                @VisitedBiomes, @KilledOverworld, @TriggeredAdvancements
+                                );";
+
+                            command.Parameters.AddWithValue("@Username", pData.Username);
+                            command.Parameters.AddWithValue("@Health", pData.Health);
+                            command.Parameters.AddWithValue("@MaxHealth", pData.MaxHealth);
+                            command.Parameters.AddWithValue("@Hunger", pData.Hunger);
+                            command.Parameters.AddWithValue("@PositionX", pData.Position.X);
+                            command.Parameters.AddWithValue("@PositionY", pData.Position.Y);
+                            command.Parameters.AddWithValue("@Rotation", pData.Rotation);
+                            command.Parameters.AddWithValue("@IsBlocking", pData.IsBlocking ? 1 : 0);
+                            command.Parameters.AddWithValue("@CurrentDimension", (int)pData.CurrentDimension);
+                            command.Parameters.AddWithValue("@SelectedSlot", pData.SelectedSlot);
+                            command.Parameters.AddWithValue("@AshenTime", pData.AshenTime);
+                            command.Parameters.AddWithValue("@BrimstalkerCooldown", pData.BrimstalkerCooldown);
+                            command.Parameters.AddWithValue("@Inventory", inventoryJson);
+                            command.Parameters.AddWithValue("@CraftingSlot1ItemID", pData.CraftingSlot1.ItemID ?? "none");
+                            command.Parameters.AddWithValue("@CraftingSlot1Count", pData.CraftingSlot1.Count);
+                            command.Parameters.AddWithValue("@CraftingSlot2ItemID", pData.CraftingSlot2.ItemID ?? "none");
+                            command.Parameters.AddWithValue("@CraftingSlot2Count", pData.CraftingSlot2.Count);
+                            command.Parameters.AddWithValue("@TimeInEndDimension", pData.TimeInEndDimension);
+                            command.Parameters.AddWithValue("@TimeOnLava", pData.TimeOnLava);
+                            command.Parameters.AddWithValue("@TotalMobsKilled", pData.TotalMobsKilled);
+                            command.Parameters.AddWithValue("@TotalQuartzObtained", pData.TotalQuartzObtained);
+                            command.Parameters.AddWithValue("@TotalRaidshroomsObtained", pData.TotalRaidshroomsObtained);
+                            command.Parameters.AddWithValue("@VisitedBiomes", visitedBiomesJson);
+                            command.Parameters.AddWithValue("@KilledOverworld", killedOverworldJson);
+                            command.Parameters.AddWithValue("@TriggeredAdvancements", triggeredAdvancementsJson);
+                            command.Transaction = transaction;
+                            await command.ExecuteNonQueryAsync();
+                        }
+                    }
+
+                    // Save Active Bombs
+                    using (var cmd = connection.CreateCommand()) { cmd.CommandText = "DELETE FROM ActiveBombs;"; cmd.Transaction = transaction; cmd.ExecuteNonQuery(); }
+                    foreach (var bomb in saveData.ActiveBombs)
+                    {
+                        using (var cmd = connection.CreateCommand())
+                        {
+                            cmd.CommandText = "INSERT INTO ActiveBombs (Data) VALUES (@Data);";
+                            cmd.Parameters.AddWithValue("@Data", JsonSerializer.Serialize(bomb));
+                            cmd.Transaction = transaction;
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
+
+                    // Save Active Gusts
+                    using (var cmd = connection.CreateCommand()) { cmd.CommandText = "DELETE FROM ActiveGusts;"; cmd.Transaction = transaction; cmd.ExecuteNonQuery(); }
+                    foreach (var gust in saveData.ActiveGusts)
+                    {
+                        using (var cmd = connection.CreateCommand())
+                        {
+                            cmd.CommandText = "INSERT INTO ActiveGusts (Data) VALUES (@Data);";
+                            cmd.Parameters.AddWithValue("@Data", JsonSerializer.Serialize(gust));
+                            cmd.Transaction = transaction;
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
+
+                    // Save Raiders
+                    using (var cmd = connection.CreateCommand()) { cmd.CommandText = "DELETE FROM Raiders;"; cmd.Transaction = transaction; cmd.ExecuteNonQuery(); }
+                    foreach (var r in saveData.Raiders)
+                    {
+                        using (var cmd = connection.CreateCommand())
+                        {
+                            cmd.CommandText = "INSERT INTO Raiders (Data) VALUES (@Data);";
+                            cmd.Parameters.AddWithValue("@Data", JsonSerializer.Serialize(r));
+                            cmd.Transaction = transaction;
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
+
+                    // Save Structures
+                    foreach (var entry in saveData.Structures)
+                    {
+                        using (var cmd = connection.CreateCommand())
+                        {
+                            cmd.CommandText = "INSERT OR REPLACE INTO Structures (PosKey, Data) VALUES (@PosKey, @Data);";
+                            cmd.Parameters.AddWithValue("@PosKey", entry.Key);
+                            cmd.Parameters.AddWithValue("@Data", JsonSerializer.Serialize(entry.Value));
+                            cmd.Transaction = transaction;
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
+
+                    transaction.Commit();
+                }
+            }
+            Console.WriteLine($"[Server] Game state saved to SQLite: {dbPath}");
         } catch (Exception ex) {
             Console.WriteLine($"[Server] Error saving game state: {ex.Message}");
         }
     }
 
     public static bool LoadGame() {
-        string path = GetSavePath();
-        if (!File.Exists(path)) return false;
+        InitializeDatabase(); // Ensure tables exist before loading
+        string dbPath = GetDatabasePath();
+        if (!File.Exists(dbPath)) return false;
 
-        Console.WriteLine("[Server] Loading game state...");
+        Console.WriteLine("[Server] Loading game state from SQLite...");
         try {
-            string jsonString = File.ReadAllText(path);
-            WorldSaveData? saveData = JsonSerializer.Deserialize<WorldSaveData>(jsonString, new JsonSerializerOptions { IncludeFields = true });
-            if (saveData == null) return false;
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
 
-            BulletboxWorld = new ServerWorld();
-            BulletboxWorld.Seed = saveData.Seed;
-
-            // Helper to fix null ItemIDs that cause crashes (ServerItemStack is a struct, so inv[i] is never null)
-            Action<ServerItemStack[]?> sanitizeInventory = (inv) => {
-                if (inv == null) return;
-                for (int i = 0; i < inv.Length; i++) 
-                    if (inv[i].ItemID == null) inv[i].ItemID = "none";
-            };
-
-            lock (BulletboxWorld.Raiders) {
-                BulletboxWorld.Raiders.Clear();
-                foreach (var rData in saveData.Raiders) {
-                    var bot = new RaiderBot(rData.Name, rData.Position) {
-                        Velocity = rData.Velocity, Health = rData.Health,
-                        PreviousHealth = rData.PreviousHealth, MaxHealth = rData.MaxHealth,
-                        Rotation = rData.Rotation, AttackTimer = rData.AttackTimer,
-                        HeldItemID = rData.HeldItemID, AttackCooldown = rData.AttackCooldown,
-                        FleeTimer = rData.FleeTimer, WanderTarget = rData.WanderTarget,
-                        WanderWaitTimer = rData.WanderWaitTimer, ChargePhase = rData.ChargePhase,
-                        ChargeTimer = rData.ChargeTimer, ChargeCooldown = rData.ChargeCooldown,
-                        ChargeDirection = rData.ChargeDirection, HasDealtChargeDamage = rData.HasDealtChargeDamage,
-                        Dimension = rData.Dimension
-                    };
-                    BulletboxWorld.Raiders.Add(bot);
+                // Load World Data
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT Key, Value FROM WorldData";
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            string key = reader.GetString(0);
+                            string val = reader.GetValue(1).ToString() ?? "";
+                            if (key == "Seed") BulletboxWorld.Seed = int.Parse(val);
+                            else if (key == "WorldTime") _worldTime = float.Parse(val);
+                            else if (key == "FlickerSpawnTimer") _flickerSpawnTimer = float.Parse(val);
+                            else if (key == "PlayerRegenTimer") _playerRegenTimer = float.Parse(val);
+                            else if (key == "RaidTimer") BulletboxWorld.RaidTimer = float.Parse(val);
+                            else if (key == "RaidActive") BulletboxWorld.RaidActive = val == "1" || val.Equals("True", StringComparison.OrdinalIgnoreCase);
+                            else if (key == "ActiveRaidOutpostPositionX") {
+                                if (float.TryParse(val, out float x)) {
+                                    var current = BulletboxWorld.ActiveRaidOutpostPosition ?? new SerializableVector2(0, 0);
+                                    BulletboxWorld.ActiveRaidOutpostPosition = new SerializableVector2(x, current.Y);
+                                }
+                            }
+                            else if (key == "ActiveRaidOutpostPositionY") {
+                                if (float.TryParse(val, out float y)) {
+                                    var current = BulletboxWorld.ActiveRaidOutpostPosition ?? new SerializableVector2(0, 0);
+                                    BulletboxWorld.ActiveRaidOutpostPosition = new SerializableVector2(current.X, y);
+                                }
+                            }
+                        }
+                    }
                 }
-            }
 
-            lock (BulletboxWorld.ActiveBombs) {
-                BulletboxWorld.ActiveBombs.Clear();
-                BulletboxWorld.ActiveBombs.AddRange(saveData.ActiveBombs);
-            }
-
-            lock (BulletboxWorld.ActiveGusts) {
-                BulletboxWorld.ActiveGusts.Clear();
-                BulletboxWorld.ActiveGusts.AddRange(saveData.ActiveGusts);
-            }
-
-            lock (BulletboxWorld.Structures) {
-                BulletboxWorld.Structures.Clear();
-                foreach (var entry in saveData.Structures) {
-                    string[] keyParts = entry.Key.Split(',');
-                    int cx = int.Parse(keyParts[0]);
-                    int cy = int.Parse(keyParts[1]);
-                    sanitizeInventory(entry.Value.ChestInventory);
-                    BulletboxWorld.Structures.TryAdd((cx, cy), entry.Value);
+                // Load Raiders
+                lock (BulletboxWorld.Raiders)
+                {
+                    BulletboxWorld.Raiders.Clear();
+                    using (var cmd = connection.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT Data FROM Raiders";
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var rData = JsonSerializer.Deserialize<RaiderSaveData>(reader.GetString(0));
+                                if (rData == null) continue;
+                                var bot = new RaiderBot(rData.Name, rData.Position) {
+                                    Velocity = rData.Velocity, Health = rData.Health,
+                                    PreviousHealth = rData.PreviousHealth, MaxHealth = rData.MaxHealth,
+                                    Rotation = rData.Rotation, AttackTimer = rData.AttackTimer,
+                                    HeldItemID = rData.HeldItemID ?? "none", AttackCooldown = rData.AttackCooldown,
+                                    FleeTimer = rData.FleeTimer, WanderTarget = rData.WanderTarget,
+                                    WanderWaitTimer = rData.WanderWaitTimer, ChargePhase = rData.ChargePhase,
+                                    ChargeTimer = rData.ChargeTimer, ChargeCooldown = rData.ChargeCooldown,
+                                    ChargeDirection = rData.ChargeDirection, HasDealtChargeDamage = rData.HasDealtChargeDamage,
+                                    Dimension = rData.Dimension
+                                };
+                                BulletboxWorld.Raiders.Add(bot);
+                            }
+                        }
+                    }
                 }
-            }
 
-            _worldTime = saveData.WorldTime;
-            _flickerSpawnTimer = saveData.FlickerSpawnTimer;
-            _playerRegenTimer = saveData.PlayerRegenTimer;
-            BulletboxWorld.RaidTimer = saveData.RaidTimer;
-            BulletboxWorld.RaidActive = saveData.RaidActive;
-            BulletboxWorld.ActiveRaidOutpostPosition = saveData.ActiveRaidOutpostPosition;
+                // Load Active Bombs
+                lock (BulletboxWorld.ActiveBombs)
+                {
+                    BulletboxWorld.ActiveBombs.Clear();
+                    using (var cmd = connection.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT Data FROM ActiveBombs";
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var bombData = JsonSerializer.Deserialize<ServerBomb>(reader.GetString(0));
+                                if (bombData != null)
+                                {
+                                    BulletboxWorld.ActiveBombs.Add(bombData);
+                                }
+                            }
+                        }
+                    }
+                }
 
-            lock (LoadedPlayers) {
-                LoadedPlayers.Clear();
-                foreach (var pData in saveData.Players) {
-                    if (pData == null || string.IsNullOrEmpty(pData.Username)) continue;
-                    sanitizeInventory(pData.Inventory);
-                    if (pData.CraftingSlot1.ItemID == null) pData.CraftingSlot1 = new ServerItemStack("none", 0); // Fix for null ItemID
-                    if (pData.CraftingSlot2.ItemID == null) pData.CraftingSlot2 = new ServerItemStack("none", 0); // Fix for null ItemID
-                    if (pData.VisitedBiomes == null) pData.VisitedBiomes = new HashSet<BiomeType>();
-                    if (pData.TriggeredAdvancements == null) pData.TriggeredAdvancements = new HashSet<string>();
-                    // Sanitize float fields for NaN/Infinity
-                    if (pData.KilledOverworld == null) pData.KilledOverworld = new HashSet<string>();
-                    if (float.IsNaN(pData.TimeInEndDimension) || float.IsInfinity(pData.TimeInEndDimension)) pData.TimeInEndDimension = 0f;
-                    if (pData.CraftingSlot2.ItemID == null) pData.CraftingSlot2 = new ServerItemStack("none", 0);
-                    // LastKnownBiome is not loaded here as PlayerSaveData definition is not available.
-                    LoadedPlayers[pData.Username] = pData;
+                // Load Active Gusts
+                lock (BulletboxWorld.ActiveGusts)
+                {
+                    BulletboxWorld.ActiveGusts.Clear();
+                    using (var cmd = connection.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT Data FROM ActiveGusts";
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var gustData = JsonSerializer.Deserialize<ServerGust>(reader.GetString(0));
+                                if (gustData != null)
+                                {
+                                    BulletboxWorld.ActiveGusts.Add(gustData);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Load Structures
+                lock (BulletboxWorld.Structures)
+                {
+                    BulletboxWorld.Structures.Clear();
+                    using (var cmd = connection.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT Data FROM Structures";
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var sData = JsonSerializer.Deserialize<Structure>(reader.GetString(0));
+                                if (sData != null)
+                                {
+                                    BulletboxWorld.Structures.TryAdd((sData.ChunkX, sData.ChunkY), sData);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Load Players
+                lock (LoadedPlayers)
+                {
+                    LoadedPlayers.Clear();
+                    using (var cmd = connection.CreateCommand())
+                    {
+                        // Use explicit column names to prevent index mismatch bugs
+                        cmd.CommandText = @"SELECT 
+                            Username, Health, MaxHealth, Hunger, PositionX, PositionY, Rotation, IsBlocking, 
+                            CurrentDimension, SelectedSlot, AshenTime, BrimstalkerCooldown, Inventory, 
+                            CraftingSlot1ItemID, CraftingSlot1Count, CraftingSlot2ItemID, CraftingSlot2Count, 
+                            TimeInEndDimension, TimeOnLava, TotalMobsKilled, TotalQuartzObtained, 
+                            TotalRaidshroomsObtained, VisitedBiomes, KilledOverworld, TriggeredAdvancements 
+                            FROM PlayerData";
+                            
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var pData = new PlayerSaveData();
+                                pData.Username = reader.GetString(reader.GetOrdinal("Username"));
+                                pData.Health = reader.GetInt32(reader.GetOrdinal("Health"));
+                                pData.MaxHealth = reader.GetInt32(reader.GetOrdinal("MaxHealth"));
+                                pData.Hunger = reader.GetInt32(reader.GetOrdinal("Hunger"));
+                                pData.Position = new Vector2(reader.GetFloat(reader.GetOrdinal("PositionX")), reader.GetFloat(reader.GetOrdinal("PositionY")));
+                                pData.Rotation = reader.GetFloat(reader.GetOrdinal("Rotation"));
+                                pData.IsBlocking = reader.GetInt32(reader.GetOrdinal("IsBlocking")) == 1;
+                                pData.CurrentDimension = (Dimension)reader.GetInt32(reader.GetOrdinal("CurrentDimension"));
+                                pData.SelectedSlot = reader.GetInt32(reader.GetOrdinal("SelectedSlot"));
+                                pData.AshenTime = reader.GetFloat(reader.GetOrdinal("AshenTime"));
+                                pData.BrimstalkerCooldown = reader.GetFloat(reader.GetOrdinal("BrimstalkerCooldown"));
+                                pData.Inventory = JsonSerializer.Deserialize<ServerItemStack[]>(reader.GetString(reader.GetOrdinal("Inventory"))) ?? new ServerItemStack[25];
+                                pData.CraftingSlot1 = new ServerItemStack(reader.GetString(reader.GetOrdinal("CraftingSlot1ItemID")), reader.GetInt32(reader.GetOrdinal("CraftingSlot1Count")));
+                                pData.CraftingSlot2 = new ServerItemStack(reader.GetString(reader.GetOrdinal("CraftingSlot2ItemID")), reader.GetInt32(reader.GetOrdinal("CraftingSlot2Count")));
+                                pData.TimeInEndDimension = reader.GetFloat(reader.GetOrdinal("TimeInEndDimension"));
+                                pData.TimeOnLava = reader.GetFloat(reader.GetOrdinal("TimeOnLava"));
+                                pData.TotalMobsKilled = reader.GetInt32(reader.GetOrdinal("TotalMobsKilled"));
+                                pData.TotalQuartzObtained = reader.GetInt32(reader.GetOrdinal("TotalQuartzObtained"));
+                                pData.TotalRaidshroomsObtained = reader.GetInt32(reader.GetOrdinal("TotalRaidshroomsObtained"));
+                                pData.VisitedBiomes = JsonSerializer.Deserialize<HashSet<BiomeType>>(reader.GetString(reader.GetOrdinal("VisitedBiomes"))) ?? new HashSet<BiomeType>();
+                                pData.KilledOverworld = JsonSerializer.Deserialize<HashSet<string>>(reader.GetString(reader.GetOrdinal("KilledOverworld"))) ?? new HashSet<string>();
+                                pData.TriggeredAdvancements = JsonSerializer.Deserialize<HashSet<string>>(reader.GetString(reader.GetOrdinal("TriggeredAdvancements"))) ?? new HashSet<string>();
+                                
+                                LoadedPlayers[pData.Username] = pData;
+                            }
+                        }
+                    }
                 }
             }
             return true;

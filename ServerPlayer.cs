@@ -8,8 +8,8 @@ using System.Linq;
 
 // Data structure must match client exactly
 public struct ServerItemStack {
-    public string ItemID;
-    public int Count;
+    public string ItemID { get; set; }
+    public int Count { get; set; }
     public ServerItemStack(string id, int count) { ItemID = id; Count = count; }
 }
 
@@ -108,6 +108,11 @@ public class ServerPlayer
                         }
                         // Create a unique copy of the inventory array for the live session
                         Inventory = (ServerItemStack[])savedData.Inventory.Clone();
+                        // CRITICAL: Sanitize inventory to prevent null ItemIDs from crashing the writer
+                        for (int i = 0; i < Inventory.Length; i++) {
+                            if (Inventory[i].ItemID == null) Inventory[i].ItemID = "none";
+                        }
+
                         CraftingSlot1 = savedData.CraftingSlot1;
                         CraftingSlot2 = savedData.CraftingSlot2;
                         VisitedBiomes = savedData.VisitedBiomes != null ? new HashSet<BiomeType>(savedData.VisitedBiomes) : new HashSet<BiomeType>();
@@ -521,7 +526,7 @@ public class ServerPlayer
         {
             Writer.Write((byte)4); 
             for (int i = 0; i < 25; i++) {
-                Writer.Write(Inventory[i].ItemID);
+                Writer.Write(Inventory[i].ItemID ?? "none");
                 Writer.Write(Inventory[i].Count);
             }
             Writer.Flush();
@@ -795,9 +800,9 @@ public class ServerPlayer
                     p.Writer.Write(x);
                     p.Writer.Write(y);
                     p.Writer.Write(rot);
-                    p.Writer.Write(heldItemId);
+                    p.Writer.Write(heldItemId ?? "none");
                     // Add offhand data to movement broadcast so others can see it
-                    p.Writer.Write(offHandId);
+                    p.Writer.Write(offHandId ?? "none");
                     p.Writer.Write(blocking);
                     p.Writer.Write(hp);
                     p.Writer.Write(maxHp);

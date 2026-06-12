@@ -1,7 +1,7 @@
 // ItemStack.cs
 public struct ItemStack {
-    public string ItemID; // e.g. "sword", "none" for empty.
-    public int Count;   // 1 to 99
+    public string ItemID { get; set; } // e.g. "sword", "none" for empty.
+    public int Count { get; set; }   // 1 to 99
 
     public ItemStack(string id, int count) {
         ItemID = id;
