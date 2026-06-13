@@ -320,26 +320,28 @@ public class Connection
                 else if (packetId == 25) // Advancement Trigger
                 {
                     string advancementId = _reader.ReadString();
+                    bool showPopup = _reader.ReadBoolean();
                     Console.WriteLine($"[Network] Advancement Progress: {advancementId}");
 
+                    // 1. World-Specific Tracking (Tracked by current session and saved in world .db)
+                    Program.PlayingState?.GrantAdvancement(advancementId, showPopup);
+
+                    // 2. User-Specific Tracking (Global profile, saved in user_data.json)
                     if (Program.CurrentUser != null)
                     {
-                        Program.PlayingState?.TriggerAdvancementPopup(advancementId);
-
-                        dynamic user = Program.CurrentUser;
                         if (advancementId.StartsWith("EnterBiome:"))
                         {
                             if (byte.TryParse(advancementId.Split(':')[1], out byte bId))
-                                if (!user.VisitedBiomes.Contains(bId)) user.VisitedBiomes.Add(bId);
+                                if (!Program.CurrentUser.VisitedBiomes.Contains(bId)) Program.CurrentUser.VisitedBiomes.Add(bId);
                         }
                         else if (advancementId.StartsWith("Kill:"))
                         {
                             string mob = advancementId.Split(':')[1];
-                            if (!user.KilledOverworld.Contains(mob)) user.KilledOverworld.Add(mob);
+                            if (!Program.CurrentUser.KilledOverworld.Contains(mob)) Program.CurrentUser.KilledOverworld.Add(mob);
                         }
                         else
                         {
-                            user.Advancements[advancementId] = true;
+                            Program.CurrentUser.Advancements[advancementId] = true;
                         }
                         SaveManager.Save(Program.CurrentUser);
                     }

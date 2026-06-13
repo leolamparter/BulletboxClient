@@ -1,4 +1,4 @@
-﻿﻿﻿﻿using Raylib_cs;
+﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
 using System.IO;
@@ -9,7 +9,7 @@ public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, 
 
 class Program
 {
-    public const string VERSION = "Bulletbox 26.1 Pre-Release 3";
+    public const string VERSION = "Bulletbox 26.1 Pre-Release 4";
     public static GameState CurrentState = GameState.SPLASH;
     public static UserData CurrentUser = new UserData();
     public static WorldData? CurrentWorldData; // To store the currently loaded world's data
@@ -32,6 +32,7 @@ class Program
     private static Random _musicRng = new Random();
     // Global Music Management
     private static string _currentMusicKey = "";
+    private static float _musicTimer = 0f;
     private static int _currentCalmTrack = _musicRng.Next(1, 7); // Initialize with a random track
 
     public static void TriggerSplash(GameState next, Action? loadingAction = null)
@@ -153,6 +154,11 @@ class Program
                 if (CurrentState == GameState.PLAYING) 
                 {
                     IsPaused = !IsPaused;
+                    if (IsPaused && PlayingState != null)
+                    {
+                        PlayingState.InvMenu.Visible = false;
+                        PlayingState.InvMenu.ChestVisible = false;
+                    }
                 }
             }
 
@@ -178,6 +184,16 @@ class Program
                     if (!ServerProgram.BulletboxWorld.IsLoaded) // Check if world is already loaded
                     {
                         ServerProgram.BulletboxWorld.IsLoaded = ServerProgram.LoadGame(); // Attempt to load game
+                        
+                        // Version Check: If the world version doesn't match, show the warning screen
+                        if (ServerProgram.BulletboxWorld.IsLoaded && CurrentWorldData != null)
+                        {
+                            if (CurrentWorldData.Version != VERSION && !ShowVersionWarning)
+                            {
+                                CurrentState = GameState.VERSION_WARNING;
+                                break;
+                            }
+                        }
                     }
                     if (PlayingState == null)
                     {
@@ -194,6 +210,11 @@ class Program
                     }
                     else
                     {
+                        // Stamp current version on singleplayer connection success
+                        if (CurrentWorldData != null && LastIP == "127.0.0.1")
+                        {
+                            CurrentWorldData.Version = VERSION;
+                        }
                         CurrentState = GameState.PLAYING;
                     }
                     break;
@@ -272,7 +293,7 @@ class Program
                             CurrentWorldData.Version = Program.VERSION;
                             _ = ServerProgram.SaveGameAsync(); // Save the updated version
                         }
-                        ShowVersionWarning = false;
+                        ShowVersionWarning = true; // Bypass warning for the remainder of this session
                         CurrentState = GameState.SINGLEPLAYER_CONNECTING; // Re-attempt connection, this time without warning
                     }
                     break;
@@ -382,6 +403,7 @@ class Program
         bool isSilent = false;
         string targetMusic = "";
         float volume = 0.20f;
+        _musicTimer += Raylib.GetFrameTime();
 
         // 1. Select Target Track & State
         if (IsEnding || (CurrentState == GameState.PLAYING && Net.CurrentDimension == Dimension.TheEnd))
@@ -410,9 +432,16 @@ class Program
                 volume = 0.20f;
 
                 // Auto-cycle to a new random track if the current one finished
-                if (_currentMusicKey == targetMusic && !AudioManager.IsSoundPlaying(targetMusic))
+                // Give the track at least 2 seconds to initialize/play before allowing an auto-cycle
+                if (_currentMusicKey == targetMusic && !AudioManager.IsSoundPlaying(targetMusic) && _musicTimer > 2.0f)
                 {
-                    _currentCalmTrack = _musicRng.Next(1, 7);
+                    // Pick a different track than the one that just finished or failed
+                    int nextTrack = _currentCalmTrack;
+                    while (nextTrack == _currentCalmTrack)
+                    {
+                        nextTrack = _musicRng.Next(1, 7);
+                    }
+                    _currentCalmTrack = nextTrack;
                     targetMusic = $"calm_{_currentCalmTrack}";
                 }
             }
@@ -423,6 +452,7 @@ class Program
         {
             if (!string.IsNullOrEmpty(_currentMusicKey)) AudioManager.StopSound(_currentMusicKey);
             _currentMusicKey = targetMusic;
+            _musicTimer = 0f; // Reset timer whenever we start a new track
             if (!string.IsNullOrEmpty(_currentMusicKey)) AudioManager.PlaySound(_currentMusicKey);
         }
 
@@ -431,7 +461,8 @@ class Program
         {
             float finalVol = MusicEnabled ? volume * MusicVolume : 0f;
             AudioManager.SetVolume(_currentMusicKey, finalVol);
-            if (finalVol > 0 && !AudioManager.IsSoundPlaying(_currentMusicKey)) AudioManager.PlaySound(_currentMusicKey);
+            // Only force a play if we aren't in the middle of starting the track
+            if (finalVol > 0 && !AudioManager.IsSoundPlaying(_currentMusicKey) && _musicTimer > 2.0f) AudioManager.PlaySound(_currentMusicKey);
             else if (finalVol <= 0 && AudioManager.IsSoundPlaying(_currentMusicKey)) AudioManager.StopSound(_currentMusicKey);
         }
     }
@@ -466,6 +497,7 @@ class Program
         LanDiscovery.StopBroadcasting();
         CurrentWorldData = null; // Clear world metadata so next session is fresh
         ServerProgram.IsRunning = false;
+        ShowVersionWarning = false; // Reset warning flag for next world load
         PlayingState = null;   
         IsPaused = false;
         IsEnding = false;

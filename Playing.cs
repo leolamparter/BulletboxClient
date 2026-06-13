@@ -21,7 +21,18 @@ public enum FeatureType
     OasisDesert,
     BeachUmbrella,
     Sailboat,
-    SulfurSpring
+    SulfurSpring,
+    FrozenTree,
+    BerryBush,
+    Lilypads,
+    IceSpike1,
+    IceSpike2,
+    SnowPile1,
+    SnowPile2,
+    SnowPile3,
+    Cactus,
+    DeadBush,
+    CherryTree
 }
 
 public class DamageParticle
@@ -225,11 +236,18 @@ public class Playing
         new Color(45, 80, 145, 255),   // 4: Ocean
         new Color(240, 220, 180, 255), // 5: Beach
         new Color(210, 95, 60, 255),   // 6: Brimstone
-        new Color(75, 150, 210, 255), // 7: River
+        new Color(75, 150, 210, 255),  // 7: River
         new Color(34, 14, 14, 255),    // 8: Ashen Wastelands (Base: #220e0e)
-        new Color(202, 28, 28, 255),    // 9: Lava Pool (Base: #ca1c1c)
+        new Color(202, 28, 28, 255),   // 9: Lava Pool (Base: #ca1c1c)
         new Color(40, 40, 40, 255),    // 10: The End (Base: Dark Gray)
-        new Color(0, 0, 0, 255)        // 11: Void (Solid Black)
+        new Color(0, 0, 0, 255),       // 11: Void (Solid Black)
+        new Color(180, 95, 45, 255),   // 12: Mesa (Terracotta Orange)
+        new Color(180, 200, 210, 255), // 13: Tundra (Muted Frosty Blue)
+        new Color(150, 220, 240, 255), // 14: Frozen Ocean (Light Ice Blue)
+        new Color(255, 255, 255, 255), // 15: Icy Peaks (Snow White)
+        new Color(45, 60, 30, 255),    // 16: Swamp (Murky Green)
+        new Color(255, 180, 210, 255), // 17: Cherry Grove (Bright Pink)
+        new Color(120, 120, 125, 255)  // 18: Rocky Beach (Slate Grey)
     };
 
     public Playing(string myName)
@@ -283,6 +301,17 @@ public class Playing
         AssetManager.LoadTexture("beach_umbrella", "resources/textures/feature/beach_umbrella.png");
         AssetManager.LoadTexture("sailboat", "resources/textures/feature/sailboat.png");
         AssetManager.LoadTexture("sulfur_spring", "resources/textures/feature/sulfur_spring.png");
+        AssetManager.LoadTexture("frozen_tree", "resources/textures/feature/frozen_tree.png");
+        AssetManager.LoadTexture("berry_bush", "resources/textures/feature/berry_bush.png");
+        AssetManager.LoadTexture("lilypads", "resources/textures/feature/lilypads.png");
+        AssetManager.LoadTexture("ice_spike_1", "resources/textures/feature/ice_spike_1.png");
+        AssetManager.LoadTexture("ice_spike_2", "resources/textures/feature/ice_spike_2.png");
+        AssetManager.LoadTexture("snow_pile_1", "resources/textures/feature/snow_pile_1.png");
+        AssetManager.LoadTexture("snow_pile_2", "resources/textures/feature/snow_pile_2.png");
+        AssetManager.LoadTexture("snow_pile_3", "resources/textures/feature/snow_pile_3.png");
+        AssetManager.LoadTexture("cactus", "resources/textures/feature/cactus.png");
+        AssetManager.LoadTexture("dead_bush", "resources/textures/feature/dead_bush.png");
+        AssetManager.LoadTexture("cherry_tree", "resources/textures/feature/cherry_tree.png");
 
         // Dynamically load all item textures from the ItemStats library
         // This ensures keys like "iron_sword" or "wooden_axe" are correctly mapped to their files
@@ -1557,6 +1586,13 @@ public class Playing
                 7 => "river", // River
                 10 => "stonypeaks", // The End fallback
                 8 => "stonypeaks", // Ashen Wastelands fallback
+                12 => "desert",     // Mesa
+                13 => "stonypeaks", // Tundra
+                14 => "river",      // Frozen Ocean
+                15 => "stonypeaks", // Icy Peaks
+                16 => "forest",     // Swamp
+                17 => "meadow",     // Cherry Grove
+                18 => "stonypeaks", // Rocky Beach
                 _ => ""
             };
         }
@@ -1861,6 +1897,17 @@ public class Playing
                     FeatureType.BeachUmbrella => "beach_umbrella",
                     FeatureType.Sailboat => "sailboat",
                     FeatureType.SulfurSpring => "sulfur_spring",
+                    FeatureType.FrozenTree => "frozen_tree",
+                    FeatureType.BerryBush => "berry_bush",
+                    FeatureType.Lilypads => "lilypads",
+                    FeatureType.IceSpike1 => "ice_spike_1",
+                    FeatureType.IceSpike2 => "ice_spike_2",
+                    FeatureType.SnowPile1 => "snow_pile_1",
+                    FeatureType.SnowPile2 => "snow_pile_2",
+                    FeatureType.SnowPile3 => "snow_pile_3",
+                    FeatureType.Cactus => "cactus",
+                    FeatureType.DeadBush => "dead_bush",
+                    FeatureType.CherryTree => "cherry_tree",
                     _ => ""
                 };
 
@@ -1870,7 +1917,11 @@ public class Playing
 
                 bool isSmall = (type == FeatureType.MeadowHedge || type == FeatureType.MeadowFlowers || 
                                 type == FeatureType.Stone || type == FeatureType.DesertLog || 
-                                type == FeatureType.Tumbleweed || type == FeatureType.BeachUmbrella);
+                                type == FeatureType.Tumbleweed || type == FeatureType.BeachUmbrella ||
+                                type == FeatureType.BerryBush || type == FeatureType.Lilypads ||
+                                type == FeatureType.SnowPile1 || type == FeatureType.SnowPile2 ||
+                                type == FeatureType.SnowPile3 || type == FeatureType.Cactus ||
+                                type == FeatureType.DeadBush);
 
                 if (isSmall)
                 {
@@ -2688,6 +2739,67 @@ public class Playing
             if (biome == (byte)11) // Void
             {
                 return Color.Black;
+            }
+            if (biome == 12) // Mesa: Layered Terracotta
+            {
+                // Use Sine wave on Y coordinate to create horizontal stripes
+                float stripe = (MathF.Sin(cy * 0.8f) + 1f) * 0.5f;
+                return new Color(
+                    (int)(160 + (40 * stripe)),
+                    (int)(80 + (30 * stripe)),
+                    (int)(40 + (20 * stripe)),
+                    255);
+            }
+            if (biome == 13) // Tundra: Frozen Grass
+            {
+                return new Color(
+                    (int)(170 + (20 * noise)),
+                    (int)(190 + (20 * noise)),
+                    (int)(200 + (10 * noise)),
+                    255);
+            }
+            if (biome == 14) // Frozen Ocean: Cracked Ice
+            {
+                float iceNoise = (Perlin.Noise(cx * 0.5f, cy * 0.5f) + 1f) * 0.5f;
+                return new Color(
+                    (int)(140 + (40 * iceNoise)),
+                    (int)(210 + (25 * iceNoise)),
+                    (int)(230 + (25 * iceNoise)),
+                    255);
+            }
+            if (biome == 15) // Icy Peaks: Pure Snow
+            {
+                return new Color(
+                    (int)(245 + (10 * noise)),
+                    (int)(250 + (5 * noise)),
+                    (int)(255),
+                    255);
+            }
+            if (biome == 16) // Swamp: Murky Muck
+            {
+                return new Color(
+                    (int)(40 + (15 * noise)),
+                    (int)(55 + (10 * noise)),
+                    (int)(25 + (10 * noise)),
+                    255);
+            }
+            if (biome == 17) // Cherry Grove: Fallen Petals
+            {
+                // High frequency noise for petal-like variation
+                float petalNoise = (Perlin.Noise(cx * 0.8f, cy * 0.8f) + 1f) * 0.5f;
+                return new Color(
+                    (int)(245 + (10 * petalNoise)),
+                    (int)(170 + (25 * petalNoise)),
+                    (int)(200 + (15 * petalNoise)),
+                    255);
+            }
+            if (biome == 18) // Rocky Beach: Dark Stone
+            {
+                return new Color(
+                    (int)(110 + (20 * noise)),
+                    (int)(110 + (20 * noise)),
+                    (int)(115 + (15 * noise)),
+                    255);
             }
 
             // Standard biome noise variation

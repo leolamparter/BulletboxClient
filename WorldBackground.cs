@@ -34,7 +34,14 @@ public class WorldBackground
         new Color(34, 14, 14, 255),    // 8: Ashen Wastelands (Base: #220e0e)
         new Color(202, 28, 28, 255),    // 9: Lava Pool (Base: #ca1c1c)
         new Color(40, 40, 40, 255),    // 10: The End (Base: Dark Gray)
-        new Color(0, 0, 0, 255)        // 11: Void (Solid Black)
+        new Color(0, 0, 0, 255),        // 11: Void (Solid Black)
+        new Color(180, 95, 45, 255),   // 12: Mesa (Terracotta Orange)
+        new Color(180, 200, 210, 255), // 13: Tundra (Muted Frosty Blue)
+        new Color(150, 220, 240, 255), // 14: Frozen Ocean (Light Ice Blue)
+        new Color(255, 255, 255, 255), // 15: Icy Peaks (Snow White)
+        new Color(45, 60, 30, 255),    // 16: Swamp (Murky Green)
+        new Color(255, 180, 210, 255), // 17: Cherry Grove (Bright Pink)
+        new Color(120, 120, 125, 255)  // 18: Rocky Beach (Slate Grey)
     };
 
     private void LoadFeatureAssets()
@@ -51,6 +58,17 @@ public class WorldBackground
         AssetManager.LoadTexture("beach_umbrella", "resources/textures/feature/beach_umbrella.png");
         AssetManager.LoadTexture("sailboat", "resources/textures/feature/sailboat.png");
         AssetManager.LoadTexture("sulfur_spring", "resources/textures/feature/sulfur_spring.png");
+        AssetManager.LoadTexture("frozen_tree", "resources/textures/feature/frozen_tree.png");
+        AssetManager.LoadTexture("berry_bush", "resources/textures/feature/berry_bush.png");
+        AssetManager.LoadTexture("lilypads", "resources/textures/feature/lilypads.png");
+        AssetManager.LoadTexture("ice_spike_1", "resources/textures/feature/ice_spike_1.png");
+        AssetManager.LoadTexture("ice_spike_2", "resources/textures/feature/ice_spike_2.png");
+        AssetManager.LoadTexture("snow_pile_1", "resources/textures/feature/snow_pile_1.png");
+        AssetManager.LoadTexture("snow_pile_2", "resources/textures/feature/snow_pile_2.png");
+        AssetManager.LoadTexture("snow_pile_3", "resources/textures/feature/snow_pile_3.png");
+        AssetManager.LoadTexture("cactus", "resources/textures/feature/cactus.png");
+        AssetManager.LoadTexture("dead_bush", "resources/textures/feature/dead_bush.png");
+        AssetManager.LoadTexture("cherry_tree", "resources/textures/feature/cherry_tree.png");
     }
 
     private Color GetBiomeBaseColor(BiomeType biome, int cx, int cy)
@@ -137,6 +155,38 @@ public class WorldBackground
         {
             return Color.Black;
         }
+        if (biome == (BiomeType)12) // Mesa: Layered Terracotta
+        {
+            float stripe = (MathF.Sin(cy * 0.8f) + 1f) * 0.5f;
+            return new Color((int)(160 + (40 * stripe)), (int)(80 + (30 * stripe)), (int)(40 + (20 * stripe)), 255);
+        }
+        if (biome == (BiomeType)13) // Tundra: Frozen Grass
+        {
+            return new Color((int)(170 + (20 * noise)), (int)(190 + (20 * noise)), (int)(200 + (10 * noise)), 255);
+        }
+        if (biome == (BiomeType)14) // Frozen Ocean: Cracked Ice
+        {
+            float iceNoise = (Perlin.Noise(cx * 0.5f, cy * 0.5f) + 1f) * 0.5f;
+            return new Color((int)(140 + (40 * iceNoise)), (int)(210 + (25 * iceNoise)), (int)(230 + (25 * iceNoise)), 255);
+        }
+        if (biome == (BiomeType)15) // Icy Peaks: Pure Snow
+        {
+            return new Color((int)(245 + (10 * noise)), (int)(250 + (5 * noise)), (int)(255), 255);
+        }
+        if (biome == (BiomeType)16) // Swamp: Murky Muck
+        {
+            return new Color((int)(40 + (15 * noise)), (int)(55 + (10 * noise)), (int)(25 + (10 * noise)), 255);
+        }
+        if (biome == (BiomeType)17) // Cherry Grove: Fallen Petals
+        {
+            float petalNoise = (Perlin.Noise(cx * 0.8f, cy * 0.8f) + 1f) * 0.5f;
+            return new Color((int)(245 + (10 * petalNoise)), (int)(170 + (25 * petalNoise)), (int)(200 + (15 * petalNoise)), 255);
+        }
+        if (biome == (BiomeType)18) // Rocky Beach: Dark Stone
+        {
+            return new Color((int)(110 + (20 * noise)), (int)(110 + (20 * noise)), (int)(115 + (15 * noise)), 255);
+        }
+
         // Apply color variation to other biomes
         switch (biome)
         {
@@ -314,29 +364,53 @@ public class WorldBackground
         float sx = cx + (_seed % 5000);
         float sy = cy + (_seed / 5000);
 
-        float oceanNoise = (Perlin.Noise(sx * 0.003f, sy * 0.003f) + 1f) * 0.5f;
-        float ashenNoise = (Perlin.Noise(sx * 0.0015f, sy * 0.0015f) + 1f) * 0.5f;
-        float riverNoise = Perlin.Noise(sx * 0.025f, sy * 0.025f);
-        float noise = Perlin.Noise(sx * 0.008f, sy * 0.008f);
-        float noise2 = Perlin.Noise(sx * 0.008f * 0.5f + 1000, sy * 0.008f * 0.5f - 1000) * 0.5f;
-        float n = (noise + noise2 + 1f) * 0.5f;
-        float landN = (Perlin.Noise(sx * 0.018f + 5000, sy * 0.018f - 5000) + 1f) * 0.5f;
+        // --- REWRITTEN WORLD GEN SYSTEM (Matching ServerWorld.cs) ---
+        float continentalness = (Perlin.Noise(sx * 0.0015f, sy * 0.0015f) + 1f) * 0.5f;
+        float temperature = (Perlin.Noise(sx * 0.001f + 3000, sy * 0.001f + 3000) + 1f) * 0.5f;
+        float humidity = (Perlin.Noise(sx * 0.0012f + 8000, sy * 0.0012f + 8000) + 1f) * 0.5f;
+        float peaks = (Perlin.Noise(sx * 0.004f, sy * 0.004f) + 1f) * 0.5f;
+        float river = Perlin.Noise(sx * 0.012f, sy * 0.012f);
+        float ashen = (Perlin.Noise(sx * 0.0008f + 1500, sy * 0.0008f - 1500) + 1f) * 0.5f;
 
         BiomeType biome;
-        if (oceanNoise < 0.25f) biome = BiomeType.Ocean;
-        else if (oceanNoise < 0.30f) biome = BiomeType.Beach;
-        else if (ashenNoise > 0.68f) 
+        // 1. Water Systems
+        if (continentalness < 0.25f) {
+            biome = (temperature < 0.3f) ? BiomeType.FrozenOcean : BiomeType.Ocean;
+        } else if (continentalness < 0.30f) {
+            biome = (temperature < 0.4f) ? BiomeType.RockyBeach : BiomeType.Beach;
+        } 
+        // 2. Specialized Massive Biomes
+        else if (ashen > 0.68f) 
         {
-            float lavaNoise = (Perlin.Noise(sx * 0.008f, sy * 0.008f) + 1f) * 0.5f;
-            if (ashenNoise > 0.695f && lavaNoise > 0.50f) biome = BiomeType.LavaPool;
+            float lavaNoise = (Perlin.Noise(sx * 0.006f, sy * 0.006f) + 1f) * 0.5f;
+            if (ashen > 0.695f && lavaNoise > 0.50f) biome = BiomeType.LavaPool;
             else biome = BiomeType.AshenWastelands;
         }
-        else if (Math.Abs(riverNoise) < 0.035f) biome = BiomeType.River;
-        else if (n > 0.80f) biome = BiomeType.BrimstoneSprings;
-        else if (n < 0.20f) biome = BiomeType.StonyPeaks;
-        else if (landN < 0.46f) biome = BiomeType.Meadow;
-        else if (landN < 0.54f) biome = BiomeType.Forest;
-        else biome = BiomeType.Desert;
+        // 3. Rivers
+        else if (Math.Abs(river) < 0.035f) {
+            biome = BiomeType.River;
+        }
+        // 4. Land Biomes
+        else {
+            if (peaks > 0.75f) {
+                if (temperature < 0.35f) biome = BiomeType.IcyPeaks;
+                else if (temperature > 0.75f && humidity < 0.3f) biome = BiomeType.BrimstoneSprings;
+                else biome = BiomeType.StonyPeaks;
+            }
+            else if (temperature < 0.3f) {
+                biome = BiomeType.Tundra;
+            }
+            else if (temperature > 0.65f) {
+                if (humidity < 0.35f) biome = BiomeType.Mesa;
+                else biome = BiomeType.Desert;
+            }
+            else {
+                if (humidity > 0.8f) biome = BiomeType.Swamp;
+                else if (humidity > 0.65f) biome = BiomeType.CherryGrove;
+                else if (humidity > 0.4f) biome = BiomeType.Forest;
+                else biome = BiomeType.Meadow;
+            }
+        }
 
         _biomeCache[(cx, cy)] = biome;
         return biome;
@@ -381,6 +455,26 @@ public class WorldBackground
         if (biome == BiomeType.Ocean && roll < 4) return ServerFeatureType.Sailboat;
         if (biome == BiomeType.BrimstoneSprings && roll < 40)
             return (Math.Abs(fHash >> 8) % 10 < 4) ? ServerFeatureType.SulfurSpring : ServerFeatureType.Stone;
+        if (biome == BiomeType.Tundra && roll < 60)
+        {
+            int sub = Math.Abs(fHash >> 8) % 100;
+            if (sub < 20) return ServerFeatureType.FrozenTree;
+            if (sub < 50) return ServerFeatureType.BerryBush;
+            return ServerFeatureType.SnowPile1;
+        }
+        if (biome == BiomeType.IcyPeaks && roll < 80)
+        {
+            int sub = Math.Abs(fHash >> 8) % 100;
+            if (sub < 30) return ServerFeatureType.IceSpike1;
+            return ServerFeatureType.SnowPile1;
+        }
+        if (biome == BiomeType.FrozenOcean && roll < 15) return ServerFeatureType.IceSpike1;
+        if (biome == BiomeType.Swamp && roll < 70) 
+            return (Math.Abs(fHash >> 8) % 10 < 7) ? ServerFeatureType.Lilypads : ServerFeatureType.SmallTree;
+        if (biome == BiomeType.CherryGrove && roll < 55) return ServerFeatureType.CherryTree;
+        if (biome == BiomeType.Mesa && roll < 30)
+            return (Math.Abs(fHash >> 8) % 10 < 8) ? ServerFeatureType.DeadBush : ServerFeatureType.Cactus;
+        if (biome == BiomeType.RockyBeach && roll < 50) return ServerFeatureType.Stone;
         
         return ServerFeatureType.None;
     }
@@ -430,6 +524,17 @@ public class WorldBackground
             ServerFeatureType.BeachUmbrella => "beach_umbrella",
             ServerFeatureType.Sailboat => "sailboat",
             ServerFeatureType.SulfurSpring => "sulfur_spring",
+            ServerFeatureType.FrozenTree => "frozen_tree",
+            ServerFeatureType.BerryBush => "berry_bush",
+            ServerFeatureType.Lilypads => "lilypads",
+            ServerFeatureType.IceSpike1 => "ice_spike_1",
+            ServerFeatureType.IceSpike2 => "ice_spike_2",
+            ServerFeatureType.SnowPile1 => "snow_pile_1",
+            ServerFeatureType.SnowPile2 => "snow_pile_2",
+            ServerFeatureType.SnowPile3 => "snow_pile_3",
+            ServerFeatureType.Cactus => "cactus",
+            ServerFeatureType.DeadBush => "dead_bush",
+            ServerFeatureType.CherryTree => "cherry_tree",
             _ => ""
         };
 
@@ -439,7 +544,11 @@ public class WorldBackground
 
         bool isSmall = (type == ServerFeatureType.MeadowHedge || type == ServerFeatureType.MeadowFlowers || 
                         type == ServerFeatureType.Stone || type == ServerFeatureType.DesertLog || 
-                        type == ServerFeatureType.Tumbleweed || type == ServerFeatureType.BeachUmbrella);
+                        type == ServerFeatureType.Tumbleweed || type == ServerFeatureType.BeachUmbrella ||
+                        type == ServerFeatureType.BerryBush || type == ServerFeatureType.Lilypads ||
+                        type == ServerFeatureType.SnowPile1 || type == ServerFeatureType.SnowPile2 ||
+                        type == ServerFeatureType.SnowPile3 || type == ServerFeatureType.Cactus ||
+                        type == ServerFeatureType.DeadBush);
 
         float dx = (cx * ChunkSize) - _scrollX + (sw / 2);
         float dy = (cy * ChunkSize) - _scrollY + (sh / 2);

@@ -29,6 +29,8 @@ public class InventoryUI {
     }
 
     public void Update() {
+        if (Program.IsPaused) return;
+
         if (Raylib.IsKeyPressed(KeyboardKey.E)) {
             Visible = !Visible;
             draggingIndex = -1; 

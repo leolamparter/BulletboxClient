@@ -18,8 +18,8 @@ public class ServerProgram
     public static bool IsRunning = false;
     private static float _raidInitialTotalHealth = 0f;
     private static float _playerRegenTimer = 0f;
-    private static float _worldTime = 0f;
     private static float _flickerSpawnTimer = 0f;
+    private static float _worldTime = 0f;
     private static float _autoSaveTimer = 0f;
 
     // Use a property to ensure the server ALWAYS uses the correct world file name from the UI
@@ -69,31 +69,6 @@ public class ServerProgram
                 _worldTime += dt;
                 // Simple 10-minute cycle: 5 mins Day (0-300s), 5 mins Night (300-600s)
                 bool isNight = (_worldTime % 600) > 300;
-
-                // Rare Flicker Spawning logic (Checks every 15 seconds)
-                _flickerSpawnTimer += dt;
-                if (isNight && _flickerSpawnTimer > 15f)
-                {
-                    _flickerSpawnTimer = 0;
-                    if (rand.Next(100) < 10) // 10% chance every 15s of night
-                    {
-                        lock (ConnectedPlayers)
-                        {
-                            if (ConnectedPlayers.Count > 0)
-                            {
-                                var p = ConnectedPlayers[rand.Next(ConnectedPlayers.Count)];
-                                Vector2 pPos = BulletboxWorld.PlayerLocations.GetValueOrDefault(p.Username, Vector2.Zero);
-                                
-                                // Spawn "Flicker" 400-600 units away from a random player
-                                float spawnAngle = (float)(rand.NextDouble() * Math.PI * 2);
-                                Vector2 spawnPos = pPos + new Vector2(MathF.Cos(spawnAngle) * 500, MathF.Sin(spawnAngle) * 500);
-                                int id = rand.Next(10000, 99999);
-                                var flicker = new RaiderBot($"Flicker {id}", spawnPos) { MaxHealth = 50, Health = 50, PreviousHealth = 50, HeldItemID = "none" };
-                                lock(BulletboxWorld.Raiders) { BulletboxWorld.Raiders.Add(flicker); }
-                            }
-                        }
-                    }
-                }
 
                 float triggerDist = 960f; // 60 chunks * 16 units/chunk
 
@@ -1226,7 +1201,6 @@ public class ServerProgram
         // Destroy the old world object and its chunk/entity caches
         BulletboxWorld = new ServerWorld();
         _worldTime = 0f;
-        _flickerSpawnTimer = 0f;
         _playerRegenTimer = 0f;
         _autoSaveTimer = 0f;
         _raidInitialTotalHealth = 0f;
@@ -1297,9 +1271,6 @@ public class ServerProgram
             }
         }
 
-        // Protection: Only skip saving if NO players (online or offline) are in the database cache
-        if (LoadedPlayers.Count == 0) return; 
-
         saveData.Seed = BulletboxWorld.Seed;
         
         // Persist ALL known players
@@ -1329,8 +1300,8 @@ public class ServerProgram
         }
 
         saveData.WorldTime = _worldTime;
-        saveData.FlickerSpawnTimer = _flickerSpawnTimer;
         saveData.PlayerRegenTimer = _playerRegenTimer;
+        saveData.FlickerSpawnTimer = _flickerSpawnTimer;
         saveData.RaidTimer = BulletboxWorld.RaidTimer;
         saveData.RaidActive = BulletboxWorld.RaidActive;
         saveData.ActiveRaidOutpostPosition = BulletboxWorld.ActiveRaidOutpostPosition;
@@ -1350,17 +1321,20 @@ public class ServerProgram
                     {
                         command.CommandText = 
                             @"INSERT OR REPLACE INTO WorldData (Key, Value) VALUES 
-                            ('Seed', @Seed), ('WorldTime', @WorldTime), ('FlickerSpawnTimer', @FlickerSpawnTimer),
-                            ('PlayerRegenTimer', @PlayerRegenTimer), ('RaidTimer', @RaidTimer), ('RaidActive', @RaidActive),
-                            ('ActiveRaidOutpostPositionX', @ActiveRaidOutpostPositionX), ('ActiveRaidOutpostPositionY', @ActiveRaidOutpostPositionY);";
+                            ('Seed', @Seed), ('WorldTime', @WorldTime),
+                            ('PlayerRegenTimer', @PlayerRegenTimer), ('FlickerSpawnTimer', @FlickerSpawnTimer),
+                            ('RaidTimer', @RaidTimer), ('RaidActive', @RaidActive),
+                            ('ActiveRaidOutpostPositionX', @ActiveRaidOutpostPositionX), ('ActiveRaidOutpostPositionY', @ActiveRaidOutpostPositionY),
+                            ('Version', @Version);";
                         command.Parameters.AddWithValue("@Seed", saveData.Seed);
                         command.Parameters.AddWithValue("@WorldTime", saveData.WorldTime);
-                        command.Parameters.AddWithValue("@FlickerSpawnTimer", saveData.FlickerSpawnTimer);
                         command.Parameters.AddWithValue("@PlayerRegenTimer", saveData.PlayerRegenTimer);
+                        command.Parameters.AddWithValue("@FlickerSpawnTimer", saveData.FlickerSpawnTimer);
                         command.Parameters.AddWithValue("@RaidTimer", saveData.RaidTimer);
                         command.Parameters.AddWithValue("@RaidActive", saveData.RaidActive);
                         command.Parameters.AddWithValue("@ActiveRaidOutpostPositionX", saveData.ActiveRaidOutpostPosition?.X ?? (object)DBNull.Value);
                         command.Parameters.AddWithValue("@ActiveRaidOutpostPositionY", saveData.ActiveRaidOutpostPosition?.Y ?? (object)DBNull.Value);
+                        command.Parameters.AddWithValue("@Version", Program.VERSION);
                         command.Transaction = transaction;
                         await command.ExecuteNonQueryAsync();
                     }
@@ -1505,10 +1479,11 @@ public class ServerProgram
                             string val = reader.GetValue(1).ToString() ?? "";
                             if (key == "Seed") BulletboxWorld.Seed = int.Parse(val);
                             else if (key == "WorldTime") _worldTime = float.Parse(val);
-                            else if (key == "FlickerSpawnTimer") _flickerSpawnTimer = float.Parse(val);
                             else if (key == "PlayerRegenTimer") _playerRegenTimer = float.Parse(val);
+                            else if (key == "FlickerSpawnTimer") _flickerSpawnTimer = float.Parse(val);
                             else if (key == "RaidTimer") BulletboxWorld.RaidTimer = float.Parse(val);
                             else if (key == "RaidActive") BulletboxWorld.RaidActive = val == "1" || val.Equals("True", StringComparison.OrdinalIgnoreCase);
+                            else if (key == "Version" && Program.CurrentWorldData != null) Program.CurrentWorldData.Version = val;
                             else if (key == "ActiveRaidOutpostPositionX") {
                                 if (float.TryParse(val, out float x)) {
                                     var current = BulletboxWorld.ActiveRaidOutpostPosition ?? new SerializableVector2(0, 0);
@@ -1695,6 +1670,7 @@ public class ServerProgram
                 p.TriggeredAdvancements.Add(id);
                 p.Writer.Write((byte)25); // Use 25 to avoid collisions with Chest Move (20)
                 p.Writer.Write(id);
+                p.Writer.Write(true); // Indicate this is a new trigger that should show a popup
                 p.Writer.Flush();
             }
         } catch {}

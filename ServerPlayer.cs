@@ -163,6 +163,16 @@ public class ServerPlayer
                         Writer.Write(Position.X);
                         Writer.Write(Position.Y);
                         Writer.Write((byte)CurrentDimension);
+
+                        // NEW: Sync all existing advancements for this world/player on login
+                        // These are sent with 'false' to prevent a screen full of popups on join
+                        foreach (var advId in TriggeredAdvancements)
+                        {
+                            Writer.Write((byte)25); 
+                            Writer.Write(advId);
+                            Writer.Write(false); 
+                        }
+
                         SendFullInventory();
                         SyncHealth(); // Send initial health state immediately upon login
                     }

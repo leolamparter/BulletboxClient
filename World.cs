@@ -30,31 +30,68 @@ public class World
         float sx = x + (_seed % 5000);
         float sy = y + (_seed / 5000);
 
-        float oceanNoise = (Perlin.Noise(sx * 0.003f, sy * 0.003f) + 1f) * 0.5f;
-        float ashenNoise = (Perlin.Noise(sx * 0.0015f, sy * 0.0015f) + 1f) * 0.5f;
-        float riverNoise = Perlin.Noise(sx * 0.025f, sy * 0.025f);
-        float noise = Perlin.Noise(sx * 0.008f, sy * 0.008f);
-        float noise2 = Perlin.Noise(sx * 0.008f * 0.5f + 1000, sy * 0.008f * 0.5f - 1000) * 0.5f;
-        float n = (noise + noise2 + 1f) * 0.5f;
-        float landN = (Perlin.Noise(sx * 0.018f + 5000, sy * 0.018f - 5000) + 1f) * 0.5f;
+        // --- REWRITTEN WORLD GEN SYSTEM (Matching ServerWorld.cs) ---
+        float continentalness = (Perlin.Noise(sx * 0.0015f, sy * 0.0015f) + 1f) * 0.5f;
+        float temperature = (Perlin.Noise(sx * 0.001f + 3000, sy * 0.001f + 3000) + 1f) * 0.5f;
+        float humidity = (Perlin.Noise(sx * 0.0012f + 8000, sy * 0.0012f + 8000) + 1f) * 0.5f;
+        float peaks = (Perlin.Noise(sx * 0.004f, sy * 0.004f) + 1f) * 0.5f;
+        float river = Perlin.Noise(sx * 0.012f, sy * 0.012f);
+        float ashen = (Perlin.Noise(sx * 0.0008f + 1500, sy * 0.0008f - 1500) + 1f) * 0.5f;
 
         byte biome;
-        if (oceanNoise < 0.25f) biome = 4; // Ocean
-        else if (oceanNoise < 0.30f) biome = 5; // Beach
-        else if (ashenNoise > 0.68f) 
+        // 1. Water Systems
+        if (continentalness < 0.25f) {
+            biome = (temperature < 0.3f) ? (byte)14 : (byte)4; // Frozen Ocean or Ocean
+        } else if (continentalness < 0.30f) {
+            biome = (temperature < 0.4f) ? (byte)18 : (byte)5; // Rocky Beach or Beach
+        } 
+        // 2. Specialized Massive Biomes
+        else if (ashen > 0.68f) 
         {
-            float lavaNoise = (Perlin.Noise(sx * 0.008f, sy * 0.008f) + 1f) * 0.5f;
-            if (ashenNoise > 0.695f && lavaNoise > 0.50f) biome = 9; // LavaPool
+            float lavaNoise = (Perlin.Noise(sx * 0.006f, sy * 0.006f) + 1f) * 0.5f;
+            if (ashen > 0.695f && lavaNoise > 0.50f) biome = 9; // LavaPool
             else biome = 8; // Ashen
         }
-        else if (Math.Abs(riverNoise) < 0.035f) biome = 7; // River
-        else if (n > 0.80f) biome = 6; // Brimstone
-        else if (n < 0.20f) biome = 3; // Stony Peaks
-        else if (landN < 0.46f) biome = 0; // Meadow
-        else if (landN < 0.54f) biome = 1; // Forest
-        else biome = 2; // Desert
+        // 3. Rivers
+        else if (Math.Abs(river) < 0.035f) {
+            biome = 7; // River
+        }
+        // 4. Land Biomes
+        else {
+            if (peaks > 0.75f) {
+                if (temperature < 0.35f) biome = 15; // Icy Peaks
+                else if (temperature > 0.75f && humidity < 0.3f) biome = 6; // Brimstone Springs
+                else biome = 3; // Stony Peaks
+            }
+            else if (temperature < 0.3f) {
+                biome = 13; // Tundra
+            }
+            else if (temperature > 0.65f) {
+                if (humidity < 0.35f) biome = 12; // Mesa
+                else biome = 2; // Desert
+            }
+            else {
+                if (humidity > 0.8f) biome = 16; // Swamp
+                else if (humidity > 0.65f) biome = 17; // Cherry Grove
+                else if (humidity > 0.4f) biome = 1; // Forest
+                else biome = 0; // Meadow
+            }
+        }
 
         byte feature = 0;
+        // Simple feature mapping for singleplayer/legacy fallback
+        int fHash = (x * 73856093) ^ (y * 19349663) ^ _seed;
+        int roll = Math.Abs(fHash) % 1000;
+
+        if (roll < 50) {
+            if (biome == 1) feature = 1; // Forest -> SmallTree
+            else if (biome == 0) feature = 4; // Meadow -> Flowers
+            else if (biome == 2) feature = 21; // Desert -> Cactus
+            else if (biome == 12) feature = 22; // Mesa -> DeadBush
+            else if (biome == 13) feature = 13; // Tundra -> FrozenTree
+            else if (biome == 16) feature = 15; // Swamp -> Lilypads
+            else if (biome == 17) feature = 23; // Cherry -> CherryTree
+        }
 
         // Structure generation: 0.005% chance per chunk (1 in 20,000)
         Structure? structure = null; // Made nullable to resolve CS8600

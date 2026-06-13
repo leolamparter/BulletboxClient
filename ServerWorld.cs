@@ -16,7 +16,14 @@ public enum BiomeType : byte
     AshenWastelands = 8,
     LavaPool = 9,
     TheEnd = 10,
-    Void = 11
+    Void = 11,
+    Mesa = 12,
+    Tundra = 13,
+    FrozenOcean = 14,
+    IcyPeaks = 15,
+    Swamp = 16,
+    CherryGrove = 17,
+    RockyBeach = 18
 }
 
 public enum Dimension : byte
@@ -39,7 +46,18 @@ public enum ServerFeatureType : byte
     OasisDesert = 9,
     BeachUmbrella = 10,
     Sailboat = 11,
-    SulfurSpring = 12
+    SulfurSpring = 12,
+    FrozenTree = 13,
+    BerryBush = 14,
+    Lilypads = 15,
+    IceSpike1 = 16,
+    IceSpike2 = 17,
+    SnowPile1 = 18,
+    SnowPile2 = 19,
+    SnowPile3 = 20,
+    Cactus = 21,
+    DeadBush = 22,
+    CherryTree = 23
 }
 
 public struct ServerChunkCoord
@@ -179,42 +197,53 @@ public class ServerWorld
                 return chunk;
             }
 
-            // Dedicated low-frequency noise for rare but massive oceans
-            float oceanNoise = (Perlin.Noise(sx * 0.003f, sy * 0.003f) + 1f) * 0.5f;
-            float scale = 0.008f;
-            // Low frequency noise for massive biomes like Ashen Wastelands
-            float ashenNoise = (Perlin.Noise(sx * 0.0015f, sy * 0.0015f) + 1f) * 0.5f;
-            float riverNoise = Perlin.Noise(sx * 0.025f, sy * 0.025f);
-            float noise = Perlin.Noise(sx * scale, sy * scale);
-            float noise2 = Perlin.Noise(sx * scale * 0.5f + 1000, sy * scale * 0.5f - 1000) * 0.5f;
-            float n = (noise + noise2 + 1f) * 0.5f;
-            float landNoise = Perlin.Noise(sx * 0.018f + 5000, sy * 0.018f - 5000);
-            float landN = (landNoise + 1f) * 0.5f;
+            // --- REWRITTEN WORLD GEN SYSTEM ---
+            // Significantly reduced frequencies to create much larger biome regions
+            float continentalness = (Perlin.Noise(sx * 0.0015f, sy * 0.0015f) + 1f) * 0.5f;
+            float temperature = (Perlin.Noise(sx * 0.001f + 3000, sy * 0.001f + 3000) + 1f) * 0.5f;
+            float humidity = (Perlin.Noise(sx * 0.0012f + 8000, sy * 0.0012f + 8000) + 1f) * 0.5f;
+            float peaks = (Perlin.Noise(sx * 0.004f, sy * 0.004f) + 1f) * 0.5f;
+            float river = Perlin.Noise(sx * 0.012f, sy * 0.012f);
+            float ashen = (Perlin.Noise(sx * 0.0008f + 1500, sy * 0.0008f - 1500) + 1f) * 0.5f;
 
             BiomeType biome;
-            if (oceanNoise < 0.25f) {
-                biome = BiomeType.Ocean;
-            } else if (oceanNoise < 0.30f) {
-                biome = BiomeType.Beach;
-            } else if (ashenNoise > 0.68f) {
-                // Lava Pool pockets inside Ashen Wastelands
-                // frequency lowered to 0.008f for massive lakes and threshold dropped to 0.50
-                float lavaNoise = (Perlin.Noise(sx * 0.008f, sy * 0.008f) + 1f) * 0.5f;
-                // Buffer (0.695 > 0.68) ensures a thin border of ash always surrounds the lava
-                if (ashenNoise > 0.695f && lavaNoise > 0.50f) biome = BiomeType.LavaPool;
+
+            // 1. Water Systems (Highest Priority)
+            if (continentalness < 0.25f) {
+                biome = (temperature < 0.3f) ? BiomeType.FrozenOcean : BiomeType.Ocean;
+            } else if (continentalness < 0.30f) {
+                biome = (temperature < 0.4f) ? BiomeType.RockyBeach : BiomeType.Beach;
+            } 
+            // 2. Specialized Massive Biomes
+            else if (ashen > 0.68f) {
+                float lavaNoise = (Perlin.Noise(sx * 0.006f, sy * 0.006f) + 1f) * 0.5f;
+                if (ashen > 0.695f && lavaNoise > 0.50f) biome = BiomeType.LavaPool;
                 else biome = BiomeType.AshenWastelands;
-            } else if (Math.Abs(riverNoise) < 0.035f) {
+            }
+            // 3. Rivers (Abs Ridge Noise)
+            else if (Math.Abs(river) < 0.035f) {
                 biome = BiomeType.River;
-            } else if (n > 0.80f) {
-                biome = BiomeType.BrimstoneSprings;
-            } else if (n < 0.20f) {
-                biome = BiomeType.StonyPeaks;
-            } else if (landN < 0.46f) {
-                biome = BiomeType.Meadow;
-            } else if (landN < 0.54f) {
-                biome = BiomeType.Forest;
-            } else {
-                biome = BiomeType.Desert;
+            }
+            // 4. Multi-Layer Land Biome Selection (Temperature / Humidity / Peaks)
+            else {
+                if (peaks > 0.75f) {
+                    if (temperature < 0.35f) biome = BiomeType.IcyPeaks;
+                    else if (temperature > 0.75f && humidity < 0.3f) biome = BiomeType.BrimstoneSprings;
+                    else biome = BiomeType.StonyPeaks;
+                }
+                else if (temperature < 0.3f) {
+                    biome = BiomeType.Tundra;
+                }
+                else if (temperature > 0.65f) {
+                    if (humidity < 0.35f) biome = BiomeType.Mesa;
+                    else biome = BiomeType.Desert;
+                }
+                else { // Temperate Zone
+                    if (humidity > 0.8f) biome = BiomeType.Swamp;
+                    else if (humidity > 0.65f) biome = BiomeType.CherryGrove;
+                    else if (humidity > 0.4f) biome = BiomeType.Forest;
+                    else biome = BiomeType.Meadow;
+                }
             }
 
             chunk = new ServerChunk(chunkX, chunkY, biome);
@@ -290,6 +319,48 @@ public class ServerWorld
                 else if (biome == BiomeType.BrimstoneSprings)
                 {
                     if (roll < 40) chunk.Feature = (Math.Abs(fHash >> 8) % 10 < 4) ? ServerFeatureType.SulfurSpring : ServerFeatureType.Stone;
+                }
+                else if (biome == BiomeType.Tundra)
+                {
+                    if (roll < 60)
+                    {
+                        int sub = Math.Abs(fHash >> 8) % 100;
+                        if (sub < 20) chunk.Feature = ServerFeatureType.FrozenTree;
+                        else if (sub < 50) chunk.Feature = ServerFeatureType.BerryBush;
+                        else if (sub < 70) chunk.Feature = ServerFeatureType.SnowPile1;
+                        else if (sub < 85) chunk.Feature = ServerFeatureType.SnowPile2;
+                        else chunk.Feature = ServerFeatureType.SnowPile3;
+                    }
+                }
+                else if (biome == BiomeType.IcyPeaks)
+                {
+                    if (roll < 80)
+                    {
+                        int sub = Math.Abs(fHash >> 8) % 100;
+                        if (sub < 30) chunk.Feature = ServerFeatureType.IceSpike1;
+                        else if (sub < 50) chunk.Feature = ServerFeatureType.IceSpike2;
+                        else chunk.Feature = ServerFeatureType.SnowPile1;
+                    }
+                }
+                else if (biome == BiomeType.FrozenOcean)
+                {
+                    if (roll < 15) chunk.Feature = (Math.Abs(fHash >> 8) % 2 == 0) ? ServerFeatureType.IceSpike1 : ServerFeatureType.IceSpike2;
+                }
+                else if (biome == BiomeType.Swamp)
+                {
+                    if (roll < 70) chunk.Feature = (Math.Abs(fHash >> 8) % 10 < 7) ? ServerFeatureType.Lilypads : ServerFeatureType.SmallTree;
+                }
+                else if (biome == BiomeType.CherryGrove)
+                {
+                    if (roll < 55) chunk.Feature = ServerFeatureType.CherryTree;
+                }
+                else if (biome == BiomeType.Mesa)
+                {
+                    if (roll < 30) chunk.Feature = (Math.Abs(fHash >> 8) % 10 < 8) ? ServerFeatureType.DeadBush : ServerFeatureType.Cactus;
+                }
+                else if (biome == BiomeType.RockyBeach)
+                {
+                    if (roll < 50) chunk.Feature = ServerFeatureType.Stone;
                 }
             }
 

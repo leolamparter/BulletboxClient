@@ -17,4 +17,5 @@ public class UserData
     public HashSet<byte> VisitedBiomes { get; set; } = new();
     public HashSet<string> KilledOverworld { get; set; } = new();
     public Dictionary<string, bool> Advancements { get; set; } = new();
+    public List<string> FavoriteWorlds { get; set; } = new();
 }
