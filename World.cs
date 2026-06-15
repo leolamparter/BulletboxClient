@@ -93,10 +93,9 @@ public class World
             else if (biome == 17) feature = 23; // Cherry -> CherryTree
         }
 
-        // Structure generation: 0.005% chance per chunk (1 in 20,000)
         Structure? structure = null; // Made nullable to resolve CS8600
-        // Restriction: Prevent spawning in Ocean (4), River (7), Ashen (8), or LavaPool (9)
-        if (_rand.Next(0, 20000) < 1 && biome != 4 && biome != 7 && biome != 8 && biome != 9)
+        // Restriction: Prevent spawning in Ocean (4), Ashen (8), or LavaPool (9)
+        if (_rand.Next(0, 100000) < 1 && biome != 4 && biome != 8 && biome != 9)
         {
             // Place a raid outpost at the center of the chunk (assuming chunkSize is 16)
             Vector2 structurePos = new Vector2(x * 16 + 8, y * 16 + 8);

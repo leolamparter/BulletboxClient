@@ -107,6 +107,10 @@ public class Playing
     public int CurrentHunger = 100;
     public Dictionary<string, Player> Others = new Dictionary<string, Player>();
     public readonly object OthersLock = new();
+    public HashSet<string> RecentlyDespawned = new();
+    public readonly object RecentlyDespawnedLock = new();
+    public List<Player> UnloadQueue = new();
+    public readonly object UnloadQueueLock = new();
     public CameraManager Cam;
     public Inventory PlayerInventory = new Inventory();
     public HotbarUI Hotbar;
@@ -253,7 +257,24 @@ public class Playing
     public Playing(string myName)
     {
         LocalPlayer = new Player(myName, new Vector2(400, 300));
-        LocalPlayer.Color = Color.Blue;
+
+        if (Program.SelectedSkin == "Apex Master")
+        {
+            LocalPlayer.Color = Color.White;
+            LocalPlayer.InnerColor = Color.Magenta;
+        }
+        else if (Program.SelectedSkin == "Bob's Friend")
+        {
+            LocalPlayer.Color = Color.Blue;
+            LocalPlayer.InnerColor = Color.Magenta;
+        }
+        else
+        {
+            // Default Bob
+            LocalPlayer.Color = Color.DarkGreen;
+            LocalPlayer.InnerColor = Color.Magenta;
+        }
+
         Cam = new CameraManager(LocalPlayer.Position);
 
         // Initialize starting items: Sword only
@@ -341,6 +362,17 @@ public class Playing
         AssetManager.LoadTexture("vortex_angry", "resources/textures/entity/vortex/angry.png");
         AssetManager.LoadTexture("vortex_afraid", "resources/textures/entity/vortex/afraid.png");
         AssetManager.LoadTexture("vortex_gust", "resources/textures/entity/vortex/gust.png"); // Projectile texture
+
+        // Load Scorpion textures
+        AssetManager.LoadTexture("scorpion_idle", "resources/textures/entity/scorpion/idle.png");
+        AssetManager.LoadTexture("scorpion_angry", "resources/textures/entity/scorpion/angry.png");
+        AssetManager.LoadTexture("scorpion_attack", "resources/textures/entity/scorpion/attack.png");
+        // NEW: Raidshroomer sounds
+        AudioManager.LoadSound("raidshroomer_angry_snort", "resources/sounds/entity/raidshroomer/angry_snort.mp3");
+        AudioManager.LoadSound("raidshroomer_damaged_1", "resources/sounds/entity/raidshroomer/damaged_1.mp3");
+        AudioManager.LoadSound("raidshroomer_damaged_2", "resources/sounds/entity/raidshroomer/damaged_2.mp3");
+        AudioManager.LoadSound("raidshroomer_idle_snort", "resources/sounds/entity/raidshroomer/idle_snort.mp3");
+
         // Load Flicker texture
         AssetManager.LoadTexture("flicker_idle", "resources/textures/entity/flicker/idle.png");
         AssetManager.LoadTexture("flicker_angry", "resources/textures/entity/flicker/angry.png");
@@ -469,18 +501,6 @@ public class Playing
             p.Position += p.Velocity * dt;
             p.Size += dt * 40f; // Puff up effect
             p.Alpha = p.Life / p.MaxLife;
-        }
-
-        // Spawn Boundary Clouds during Raids
-        if (RaidActive && _fixedRaidOutpostPosition.HasValue)
-        {
-            Random rng = new Random();
-            for (int j = 0; j < 3; j++) // Spawn 3 clouds every frame for "much more frequent" look
-            {
-                float angle = (float)(rng.NextDouble() * Math.PI * 2);
-                Vector2 pos = _fixedRaidOutpostPosition.Value + new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * (120f * 16f);
-                if (rng.Next(0, 2) == 0) SpawnBoundaryCloud(pos);
-            }
         }
     }
 
@@ -644,6 +664,24 @@ public class Playing
 
     public void TriggerAdvancementPopup(string key) => GrantAdvancement(key, true);
 
+    public void Cleanup()
+    {
+        lock (OthersLock)
+        {
+            foreach (var other in Others.Values) other.UnloadResources();
+            Others.Clear();
+        }
+        lock (UnloadQueueLock)
+        {
+            foreach (var p in UnloadQueue) p.UnloadResources();
+            UnloadQueue.Clear();
+        }
+        LocalPlayer.UnloadResources();
+        
+        Raylib.UnloadRenderTexture(_sceneTarget);
+        Raylib.UnloadRenderTexture(_lightingTarget);
+    }
+
     private bool IsAdvancementAlreadyCompleted(string key)
     {
         return WorldAdvancements.Contains(key);
@@ -685,6 +723,11 @@ public class Playing
     private void ClearWorldCaches()
     {
         loadedChunks.Clear();
+        lock (OthersLock)
+        {
+            foreach (var other in Others.Values) other.UnloadResources();
+            Others.Clear();
+        }
         _chunkSnapshot.Clear();
         _featureSnapshot.Clear();
         _blendedColorCache.Clear();
@@ -702,6 +745,13 @@ public class Playing
         {
             ClearWorldCaches();
             _needsCacheClear = false;
+        }
+
+        // Process Resource Unloading Queue (Main Thread Only)
+        lock (UnloadQueueLock)
+        {
+            foreach (var p in UnloadQueue) p.UnloadResources();
+            UnloadQueue.Clear();
         }
 
         int playerChunkX = 0;
@@ -825,11 +875,11 @@ public class Playing
                 _lastDimension = Program.Net.CurrentDimension;
             }
 
-            // Passive Healing Logic: 5 HP for 4 Hunger per second
+            // Passive Healing Logic: 5 HP for 4 Hunger every 0.25 seconds (4x faster)
             _hungerHealTimer += dt;
-            if (_hungerHealTimer >= 1.0f)
+            if (_hungerHealTimer >= 0.25f)
             {
-                _hungerHealTimer -= 1.0f;
+                _hungerHealTimer -= 0.25f;
                 if (CurrentHealth < MaxHealth && CurrentHunger >= 5)
                 {
                     CurrentHealth = Math.Min(MaxHealth, CurrentHealth + 5);
@@ -845,10 +895,7 @@ public class Playing
                 foreach (var s in Structures.Values) {
                     // Check for right-clicking structures (Chests) - Server validates IsCompleted
                     if (Vector2.Distance(worldMouse, s.Position) < 150f && s.Type == StructureType.RaidOutpost) {
-                        if (s.IsCompleted)
-                        {
-                            s.HasBeenOpened = true;
-                        }
+                        s.HasBeenOpened = true;
                         Program.Net.SendOpenChest(s.ChunkX, s.ChunkY);
                         interacted = true;
                         break;
@@ -1033,9 +1080,17 @@ public class Playing
                         existingS.IsCompleted = structureEntry.Value.IsCompleted;
                     }
                 }
-                // Remove structures that are no longer in loaded chunks
-                var keysToRemove = Structures.Keys.Where(k => !loadedChunks.Contains(k)).ToList();
-                foreach (var key in keysToRemove) Structures.Remove(key);
+                // Remove structures that are no longer in loaded chunks or network cache (handles disappearance)
+                var keysToRemove = Structures.Keys.Where(k => !loadedChunks.Contains(k) || !Program.Net.Structures.ContainsKey(k)).ToList();
+                foreach (var key in keysToRemove)
+                {
+                    // If the structure was deleted (still in a loaded chunk but gone from the network), show a smoke puff
+                    if (loadedChunks.Contains(key) && Structures.TryGetValue(key, out var s))
+                    {
+                        SpawnDeathPuff(s.Position);
+                    }
+                    Structures.Remove(key);
+                }
             }
 
             // Global Raid Sound Logic
@@ -1163,21 +1218,6 @@ public class Playing
             // Apply and Decay Knockback Velocity
             LocalPlayer.Position += _kbVelocity * dt;
             _kbVelocity = Vector2.Lerp(_kbVelocity, Vector2.Zero, dt * 6.5f); // Smooth friction
-
-            // Raid Boundary Enforcement: Clamp player within 120 chunks of the active outpost
-            // Use _fixedRaidOutpostPosition aaif a raid is active or approaching
-            if ((RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f)) && _fixedRaidOutpostPosition.HasValue)
-            {
-                Vector2 activeOutpostCenter = _fixedRaidOutpostPosition.Value;
-                const float boundaryRadius = 120f * 16f; // 120 Chunks = 1920 Units
-                Vector2 offset = LocalPlayer.Position - activeOutpostCenter;
-                // Only clamp if the player is outside the boundary
-                if (offset.Length() > boundaryRadius)
-                {
-                    // Normalize the offset and scale it to the boundary radius
-                    LocalPlayer.Position = activeOutpostCenter + Vector2.Normalize(offset) * boundaryRadius;
-                }
-            }
 
             _playerArrows.Clear();
             // Find nearest two players and prepare arrow data
@@ -1331,15 +1371,28 @@ public class Playing
         {
             if (!currentOtherNames.Contains(name))
             {
-                // Something died or disconnected
-                if (_lastOtherPositions.TryGetValue(name, out var pos)) SpawnDeathPuff(pos + new Vector2(32, 32));
-                AudioManager.PlaySound("player_death"); // death.mp3
-
-                // If it's the target we just hit, play the kill sound on top
-                if (name == _lastAttackedName && (float)Raylib.GetTime() - _lastAttackTime < 1.5f)
+                bool wasDespawned = false;
+                lock (RecentlyDespawnedLock)
                 {
-                    AudioManager.PlaySound("player_kill"); // kill.mp3
-                } 
+                    if (RecentlyDespawned.Contains(name))
+                    {
+                        wasDespawned = true;
+                        RecentlyDespawned.Remove(name);
+                    }
+                }
+
+                if (!wasDespawned)
+                {
+                    // Something died or disconnected
+                    if (_lastOtherPositions.TryGetValue(name, out var pos)) SpawnDeathPuff(pos + new Vector2(32, 32));
+                    AudioManager.PlaySoundMulti("player_death"); // death.mp3
+
+                    // If it's the target we just hit, play the kill sound on top
+                    if (name == _lastAttackedName && (float)Raylib.GetTime() - _lastAttackTime < 1.5f)
+                    {
+                        AudioManager.PlaySoundMulti("player_kill"); // kill.mp3
+                    }
+                }
             }
         }
         _lastOtherNames = currentOtherNames;
@@ -1548,6 +1601,17 @@ public class Playing
         }
 
         isMoving = direction != Vector2.Zero;
+
+        // Dash Mechanic: Left Shift provides a massive boost at the cost of 10 hunger
+        if (Raylib.IsKeyPressed(KeyboardKey.LeftShift) && CurrentHunger >= 10 && isMoving && !_isChatting)
+        {
+            CurrentHunger -= 10;
+            // Add visual feedback: Spawn a "smoke puff" at the player's feet when dashing
+            SpawnDeathPuff(LocalPlayer.Position + new Vector2(32, 48));
+            ApplyKnockback(Vector2.Normalize(direction) * 110f); // Massive boost
+            Program.Net.SendDash(Vector2.Normalize(direction));
+        }
+
         cx = (int)MathF.Floor(LocalPlayer.Position.X / chunkSize);
         cy = (int)MathF.Floor(LocalPlayer.Position.Y / chunkSize);
 
@@ -1668,7 +1732,7 @@ public class Playing
             }
 
             // Sort the unique combined items by proximity to the player
-            _sortedPending = combinedUnique.OrderBy(p => Math.Abs(p.Item1 - _lastSortX) + Math.Abs(p.Item2 - _lastSortY)).ToList();
+            _sortedPending = combinedUnique.OrderBy(p => Math.Abs((long)p.Item1 - _lastSortX) + Math.Abs((long)p.Item2 - _lastSortY)).ToList();
             _pendingBlends.Clear(); // All items from _pendingBlends are now in _sortedPending
         }
         else if (_pendingBlends.Count > 0) // Only new blends, no player movement
@@ -1769,7 +1833,7 @@ public class Playing
             if (dmg > 0)
             {
                 LocalPlayer.TriggerAttack();
-                AudioManager.PlaySound("sword_swing");
+                AudioManager.PlaySoundMulti("sword_swing");
                 _lastAttackTime = (float)Raylib.GetTime();
                 
                 Vector2 worldMouse = Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), Cam.RaylibCamera);
@@ -1787,7 +1851,7 @@ public class Playing
                     if (Raylib.CheckCollisionPointRec(worldMouse, hitBox) && dist <= range)
                     {
                         // Only allow attacking other players or raiders
-                        if (!other.Name.StartsWith("Raider") && !other.Name.StartsWith("Flicker") && !other.Name.StartsWith("Vortex") && other.Name != "Brimstalker" && other.Name != "APEX" && other.Name != LocalPlayer.Name) continue;
+                        if (!other.Name.StartsWith("Raider") && !other.Name.StartsWith("Flicker") && !other.Name.StartsWith("Vortex") && !other.Name.StartsWith("Scorpion") && other.Name != "Brimstalker" && other.Name != "APEX" && other.Name != LocalPlayer.Name) continue;
                         Console.WriteLine($"Attacking {other.Name} for {dmg} dmg!");
                         _lastAttackedName = other.Name;
                         Program.Net.SendAttack(other.Name);
@@ -1863,15 +1927,6 @@ public class Playing
             }
         }
         
-        // Draw Raid Boundary Visuals (Red forcefield ring)
-        if ((RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f)) && _fixedRaidOutpostPosition.HasValue)
-        {
-            Vector2 activeOutpostCenter = _fixedRaidOutpostPosition.Value;
-            const float boundaryRadius = 120f * 16f; // 120 Chunks = 1920 Units
-            const float thickness = 10f; // Desired line thickness
-            Raylib.DrawRing(activeOutpostCenter, boundaryRadius - thickness / 2, boundaryRadius + thickness / 2, 0, 360, 360, new Color(255, 0, 0, 180));
-        }
-
         // 2. Feature Pass - Rendered Top to Bottom (Y-Sorting)
         // Iterating by Y automatically provides Y-sorting without Linq.OrderBy overhead.
         for (int y = minY; y <= maxY; y++)
@@ -1991,8 +2046,8 @@ public class Playing
                 Raylib.DrawTextureEx(tex, drawPos, 0f, scale, Color.White);
             }
 
-            // Draw "Right Click To Open" text for completed raids
-            if (structure.Type == StructureType.RaidOutpost && structure.IsCompleted && structure.TextFadeAlpha > 0.01f)
+            // Draw "Right Click To Open" text for raid outposts until opened
+            if (structure.Type == StructureType.RaidOutpost && !structure.HasBeenOpened && structure.TextFadeAlpha > 0.01f)
             {
                 float bounce = MathF.Sin((float)Raylib.GetTime() * 5.0f) * 12.0f;
                 int fontSize = 24;
@@ -2127,8 +2182,8 @@ public class Playing
             int sw = Raylib.GetScreenWidth();
             int sh = Raylib.GetScreenHeight();
             float radius = MathF.Sqrt(sw * sw + sh * sh) * 0.5f;
-            int alpha = (int)(totalIntensity * pulse * 180);
-            Raylib.DrawCircleGradient(sw / 2, sh / 2, radius, new Color(255, 0, 0, 0), new Color(255, 0, 0, Math.Clamp(alpha, 0, 255)));
+            int alpha = (int)(totalIntensity * pulse * 180); // Reduced alpha multiplier
+            Raylib.DrawCircleGradient(new Vector2(sw / 2f, sh / 2f), radius, new Color(255, 0, 0, 0), new Color(255, 0, 0, Math.Clamp(alpha, 0, 255)));
         }
 
         lock (OthersLock)
@@ -2187,31 +2242,27 @@ public class Playing
         }
 
 
-        // Draw Global Raid UI
-        if (RaidActive || (RaidTimer > 0 && RaidTimer <= 3.0f))
+        // Draw Global Raid UI (Only for bosses)
+        bool isApexActive = playersToDraw.Any(o => o.Name == "APEX");
+        bool isBrimstalkerActive = playersToDraw.Any(o => o.Name == "Brimstalker");
+
+        if (RaidActive && (isApexActive || isBrimstalkerActive))
         {
             int sw = Raylib.GetScreenWidth();
             int barW = 400, barH = 24;
             int x = sw / 2 - barW / 2;
-            int y = 45; // Fixed top-center position
+            int y = 45;
 
-            // Draw Boss Bar Background (Glow + Inner)
             Raylib.DrawRectangleRounded(new Rectangle(x - 4, y - 4, barW + 8, barH + 8), 0.5f, 4, new Color(255, 80, 0, 40));
             Raylib.DrawRectangleRounded(new Rectangle(x, y, barW, barH), 0.5f, 4, new Color(20, 20, 20, 200));
 
-            // Draw Health Fill
-            // If active, show boss HP. If approaching, fill bar based on 3s countdown progress.
-            float fillRatio = RaidActive ? RaidBossHealth : Math.Clamp(1.0f - (RaidTimer / 3.0f), 0, 1);
-            float fillWidth = barW * fillRatio;
+            float fillWidth = barW * RaidBossHealth;
             if (fillWidth > 2)
                 Raylib.DrawRectangleRounded(new Rectangle(x, y, fillWidth, barH), 0.5f, 4, new Color(255, 80, 0, 255));
                 
             Raylib.DrawRectangleRoundedLines(new Rectangle(x, y, barW, barH), 0.5f, 4, Color.Black);
             
-            // Use the thread-safe 'playersToDraw' list we captured earlier in the Draw method
-            bool isApexActive = playersToDraw.Any(o => o.Name == "APEX");
-            bool isBrimstalkerActive = playersToDraw.Any(o => o.Name == "Brimstalker");
-            string raidTitle = isApexActive ? "APEX" : (isBrimstalkerActive ? "BRIMSTALKER" : (RaidActive ? "RAID ENCOUNTER" : "RAID APPROACHING..."));
+            string raidTitle = isApexActive ? "APEX" : "BRIMSTALKER";
             int tw = Raylib.MeasureText(raidTitle, 22);
             Raylib.DrawText(raidTitle, sw / 2 - tw / 2, y - 28, 22, new Color(255, 200, 0, 255));
         }
@@ -2422,7 +2473,7 @@ public class Playing
 
         Raylib.BeginBlendMode(BlendMode.Additive);
         // Using sw * 2.5f provides a massive, ultra-smooth falloff that remains visible as a gradient
-        Raylib.DrawCircleGradient((int)sunOrigin.X, (int)sunOrigin.Y, sw * 2.5f, innerColor, outerColor);
+        Raylib.DrawCircleGradient(sunOrigin, sw * 2.5f, innerColor, outerColor);
         Raylib.EndBlendMode();
     }
 
@@ -2493,7 +2544,7 @@ public class Playing
         Color innerColor = new Color(0, 0, 0, 0); // Fully transparent black in the center
         Color outerColor = new Color(0, 0, 0, (int)(nightVignetteAmount * 255)); // Black with dynamic alpha at the edges
 
-        Raylib.DrawCircleGradient(sw / 2, sh / 2, MathF.Max(sw, sh) * 0.7f, innerColor, outerColor);
+        Raylib.DrawCircleGradient(new Vector2(sw / 2f, sh / 2f), MathF.Max(sw, sh) * 0.7f, innerColor, outerColor);
     }
     
     private void UpdateLightingUniforms()

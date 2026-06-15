@@ -6,6 +6,7 @@ public class Player
     public string Name;
     public Vector2 Position;
     public Color Color;
+    public Color InnerColor = Color.Magenta;
     
     // Add health tracking for visual display
     public int Health = 100;
@@ -14,10 +15,12 @@ public class Player
     public float Rotation = 0f;
     public string HeldItemID = "none";
     public float AttackAnimProgress = 0f;
+    public bool IsHostile = true; // Default to true for existing mobs
     public bool IsBlocking = false;
     public string OffHandItemID = "none";
 
     private float _rotation = 0f;
+    private Vector2 _lastPosition;
     private const float _rotationSpeed = 150f; // Degrees per second
 
     // Pixelation Filter Buffer
@@ -30,6 +33,7 @@ public class Player
         Name = name;
         Position = startPos;
         Color = Color.White; // Other players are white
+        _lastPosition = startPos;
         // Local player is blue, set in Playing.cs constructor
     }
 
@@ -39,13 +43,21 @@ public class Player
         if (_rotation >= 360f) _rotation -= 360f;
         if (_rotation < 0f) _rotation += 360f;
 
+        // Auto-update facing direction based on actual movement to prevent walking backwards
+        if (Position.X > _lastPosition.X) FacingRight = true;
+        else if (Position.X < _lastPosition.X) FacingRight = false;
+        _lastPosition = Position;
+
         if (AttackAnimProgress > 0)
         {
-            AttackAnimProgress -= dt / 0.2f; // Animation duration: 0.2 seconds
+            float duration = 0.2f;
+            if (Name.StartsWith("Scorpion")) duration = 0.3f;
+
+            AttackAnimProgress -= dt / duration;
             if (AttackAnimProgress < 0) AttackAnimProgress = 0;
         }
 
-        bool isMob = Name.StartsWith("Raider") || Name == "Brimstalker" || Name.StartsWith("Flicker");
+        bool isMob = Name.StartsWith("Raider") || Name == "Brimstalker" || Name.StartsWith("Flicker") || Name.StartsWith("Scorpion") || Name.StartsWith("Vortex") || Name == "APEX";
 
         // Initialize and Update the pixelated texture OUTSIDE of the Camera Mode for players
         if (!_initialized && !isMob)
@@ -74,14 +86,24 @@ public class Player
                 // Outer Square (CCW)
                 Rectangle outerDest = new Rectangle(texCenter.X, texCenter.Y, 64 * canvasScale, 64 * canvasScale);
                 Vector2 outerOrigin = new Vector2(32 * canvasScale, 32 * canvasScale);
-                Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, outerDest, outerOrigin, -_rotation, Color.DarkGreen);
+                Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, outerDest, outerOrigin, -_rotation, Color);
 
                 // Inner Square (CW)
                 float innerSize = 64 * 0.55f * canvasScale;
                 Rectangle innerDest = new Rectangle(texCenter.X, texCenter.Y, innerSize, innerSize);
                 Vector2 innerOrigin = new Vector2(innerSize / 2, innerSize / 2);
-                Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, innerDest, innerOrigin, _rotation, Color.Magenta);
+                Raylib.DrawTexturePro(_shapeTemplate.Texture, templateSource, innerDest, innerOrigin, _rotation, InnerColor);
             Raylib.EndTextureMode();
+        }
+    }
+
+    public void UnloadResources()
+    {
+        if (_initialized)
+        {
+            Raylib.UnloadRenderTexture(_pixelTarget);
+            Raylib.UnloadRenderTexture(_shapeTemplate);
+            _initialized = false;
         }
     }
 
@@ -185,6 +207,7 @@ public class Player
         bool isBrimstalker = Name == "Brimstalker";
         bool isFlicker = Name.StartsWith("Flicker");
         bool isVortex = Name.StartsWith("Vortex");
+        bool isScorpion = Name.StartsWith("Scorpion");
         bool isApex = Name == "APEX";
 
         float currentScale = 1.0f;
@@ -202,27 +225,37 @@ public class Player
             Texture2D mobTex = AssetManager.GetTexture($"apex_{stage}");
             if (mobTex.Id != 0)
             {
-                Rectangle mobSource = new Rectangle(0, 0, mobTex.Width, mobTex.Height);
+                float srcWidth = mobTex.Width;
+                if (FacingRight) srcWidth *= -1; // Flip texture horizontally when moving right
+                Rectangle mobSource = new Rectangle(0, 0, srcWidth, mobTex.Height);
                 Raylib.DrawTexturePro(mobTex, mobSource, new Rectangle(center.X, center.Y, 96 * currentScale, 96 * currentScale), new Vector2(48 * currentScale, 48 * currentScale), 0f, Color.White);
             }
         }
-        else if (isRaider || isBrimstalker || isFlicker || isVortex)
+        else if (isRaider || isBrimstalker || isFlicker || isVortex || isScorpion)
         {
             if (isFlicker) currentScale = 0.5f; // Flicker is 50% smaller
-            string texPrefix = isFlicker ? "flicker" : (isRaider ? "raidshroomer" : (isBrimstalker ? "brimstalker" : "vortex"));
+            else if (isScorpion) currentScale = 0.75f; // Scorpions are small and low to the ground
+
+            string texPrefix = isFlicker ? "flicker" : (isRaider ? "raidshroomer" : (isBrimstalker ? "brimstalker" : (isVortex ? "vortex" : "scorpion")));
             string mobTexKey = $"{texPrefix}_idle"; // Default to idle
             
-            if (Health < MaxHealth * 0.3f) mobTexKey = $"{texPrefix}_afraid";
+            if (AttackAnimProgress > 0 && isScorpion) mobTexKey = "scorpion_attack"; // Scorpion attack animation takes priority
+            else if (Health < MaxHealth * 0.3f && !isScorpion) mobTexKey = $"{texPrefix}_afraid";
             else if (Program.PlayingState != null)
             {
-                float dist = Vector2.Distance(Position, Program.PlayingState.LocalPlayer.Position);
-                if (dist < 720f) mobTexKey = $"{texPrefix}_angry";
+                // Only show angry texture if hostile and within range
+                if (IsHostile) {
+                    float dist = Vector2.Distance(Position, Program.PlayingState.LocalPlayer.Position);
+                    if (dist < 720f) mobTexKey = $"{texPrefix}_angry";
+                }
             }
 
             Texture2D mobTex = AssetManager.GetTexture(mobTexKey);
             if (mobTex.Id != 0)
             {
-                Rectangle mobSource = new Rectangle(0, 0, mobTex.Width, mobTex.Height);
+                float srcWidth = mobTex.Width;
+                if (FacingRight) srcWidth *= -1; // Flip texture horizontally when moving right
+                Rectangle mobSource = new Rectangle(0, 0, srcWidth, mobTex.Height);
                 Raylib.DrawTexturePro(mobTex, mobSource, new Rectangle(center.X, center.Y, 96 * currentScale, 96 * currentScale), new Vector2(48 * currentScale, 48 * currentScale), 0f, Color.White);
             }
             else
@@ -232,7 +265,9 @@ public class Player
         }
         else
         {
-            Rectangle playerSource = new Rectangle(0, 0, _pixelTarget.Texture.Width, -_pixelTarget.Texture.Height);
+            float srcWidth = _pixelTarget.Texture.Width;
+            if (FacingRight) srcWidth *= -1; // Flip texture horizontally when moving right
+            Rectangle playerSource = new Rectangle(0, 0, srcWidth, -_pixelTarget.Texture.Height);
             Raylib.DrawTexturePro(_pixelTarget.Texture, playerSource, dest, destOrigin, 0f, Color.White);
         }
 
@@ -275,15 +310,6 @@ public class Player
             {
                 Raylib.DrawTextureEx(tex, new Vector2(startX + i * (heartSize + spacing), screenPos.Y), 0f, heartSize / tex.Width, Color.White);
             }
-        }
-
-        // Draw Name Tag
-        if (!Name.StartsWith("Raider") && Name != "Brimstalker" && !Name.StartsWith("Flicker"))
-        {
-            int textWidth = Raylib.MeasureText(Name, 20);
-            int xPos = (int)(screenPos.X - (textWidth / 2));
-            int yPos = (int)screenPos.Y - 25; // Position above hearts
-            Raylib.DrawText(Name, xPos, yPos, 20, Color.White);
         }
     }
 }

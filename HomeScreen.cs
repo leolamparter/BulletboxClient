@@ -8,6 +8,8 @@ public class HomeScreen
     private List<UIButton> buttons;
     public static WorldBackground background = new WorldBackground();
     private string title = "BULLETBOX";
+    private Player _previewPlayer;
+    private UIButton _skinSelectButton;
 
     public void DrawBackgroundOnly() 
     {
@@ -25,11 +27,43 @@ public class HomeScreen
         buttons.Add(new UIButton("OPTIONS", Vector2.Zero, 40));
         buttons.Add(new UIButton("ADVANCEMENTS", Vector2.Zero, 40));
         buttons.Add(new UIButton("QUIT GAME", Vector2.Zero, 40));
+
+        _previewPlayer = new Player("Preview", Vector2.Zero);
+        _skinSelectButton = new UIButton("SELECT SKIN", Vector2.Zero, 25);
     }
 
     public void Update(bool windowResized)
     {
         background.Update(windowResized);
+
+        float sw = Raylib.GetScreenWidth();
+        float sh = Raylib.GetScreenHeight();
+
+        // Position preview on the left side and update its rotation/state
+        _previewPlayer.Position = new Vector2(sw / 6f - 32, sh / 2f - 32);
+
+        // Update preview colors based on selected skin
+        if (Program.SelectedSkin == "Apex Master")
+        {
+            _previewPlayer.Color = Color.White;
+            _previewPlayer.InnerColor = Color.Magenta;
+        }
+        else if (Program.SelectedSkin == "Bob's Friend")
+        {
+            _previewPlayer.Color = Color.Blue;
+            _previewPlayer.InnerColor = Color.Magenta;
+        }
+        else
+        {
+            _previewPlayer.Color = Color.DarkGreen;
+            _previewPlayer.InnerColor = Color.Magenta;
+        }
+
+        _previewPlayer.Update(Raylib.GetFrameTime());
+
+        _skinSelectButton.Position = new Vector2(sw / 6f, sh / 2f + 60);
+        if (_skinSelectButton.IsClicked()) Program.CurrentState = GameState.SKIN_SELECTOR;
+
         for (int i = 0; i < buttons.Count; i++)
         {
             if (buttons[i].IsClicked())
@@ -57,6 +91,9 @@ public class HomeScreen
     public void Draw()
     {
         background.Draw();
+
+        _previewPlayer.Draw();
+        _skinSelectButton.Draw();
 
         float screenW = Raylib.GetScreenWidth();
         float screenH = Raylib.GetScreenHeight();

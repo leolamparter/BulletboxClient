@@ -1,17 +1,22 @@
-﻿﻿using Raylib_cs;
+﻿﻿﻿﻿﻿﻿﻿﻿using Raylib_cs;
 using System.Numerics;
 using System;
 using System.IO;
 using BulletboxClient; // Ensure this is present for WorldData
 using DiscordRPC;
 
-public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, ADD_ONS, DISCONNECTED, DEATH, ADVANCEMENTS, WORLD_SELECTION, CREATE_WORLD, VERSION_WARNING }
+public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, SINGLEPLAYER_CONNECTING, ADD_ONS, DISCONNECTED, DEATH, ADVANCEMENTS, WORLD_SELECTION, CREATE_WORLD, VERSION_WARNING, SKIN_SELECTOR }
 
 class Program
 {
-    public const string VERSION = "Bulletbox 26.1 Pre-Release 4";
+    public const string VERSION = "Bulletbox 26.1 Pre-Release 5";
     public static GameState CurrentState = GameState.SPLASH;
     public static UserData CurrentUser = new UserData();
+    public static string SelectedSkin 
+    {
+        get => CurrentUser.SelectedSkin;
+        set => CurrentUser.SelectedSkin = value;
+    }
     public static WorldData? CurrentWorldData; // To store the currently loaded world's data
     
     public static Connection Net = new Connection();
@@ -30,6 +35,20 @@ class Program
     private static float _lastAttempt = 0;
 
     private static Random _musicRng = new Random();
+
+    public static void RedeemSkin(string code)
+    {
+        var user = CurrentUser;
+        if (code == "ATTHSYTOG")
+        {
+            if (!user.UnlockedSkins.Contains("Apex Master"))
+            {
+                user.UnlockedSkins.Add("Apex Master");
+                SaveManager.Save(CurrentUser);
+            }
+        }
+    }
+
     // Global Music Management
     private static string _currentMusicKey = "";
     private static float _musicTimer = 0f;
@@ -122,6 +141,8 @@ class Program
         DeathScreen deathScreen = new DeathScreen();
         WorldSelectionScreen worldSelectionScreen = new WorldSelectionScreen();
         CreateWorldScreen createWorldScreen = new CreateWorldScreen();
+        SkinSelectorScreen skinSelectorScreen = new SkinSelectorScreen();
+        _skinBtnNav = new UIButton("CHANGE SKIN", Vector2.Zero, 25);
 
         // Load Background Soundtracks early for UI support
         for (int i = 1; i <= 6; i++) AudioManager.LoadSound($"calm_{i}", $"resources/soundtracks/calm/{i}.mp3");
@@ -235,9 +256,9 @@ class Program
                         break;
                     }
                     // Always update playing state so networking/health packets process, even if paused
-                    PlayingState.Update(Raylib.GetFrameTime(), windowResizedThisFrame);
+                    PlayingState?.Update(Raylib.GetFrameTime(), windowResizedThisFrame);
 
-                    if (IsPaused) pauseMenu.Update(windowResizedThisFrame);
+                    if (IsPaused) pauseMenu?.Update(windowResizedThisFrame);
                     // Death Check: Kick on death
                     if (PlayingState != null && PlayingState.CurrentHealth <= 0) 
                     {
@@ -255,11 +276,20 @@ class Program
                     break;
                 case GameState.OPTIONS:
                     optionsScreen.Update(windowResizedThisFrame);
+                    if (_skinBtnNav != null)
+                    {
+                        _skinBtnNav.Position = new Vector2(Raylib.GetScreenWidth() - 150, 40);
+                        if (_skinBtnNav.IsClicked()) CurrentState = GameState.SKIN_SELECTOR;
+                    }
+
                     // Save settings if we just moved back to the home or playing screen
-                    if (CurrentState != GameState.OPTIONS)
+                    if (CurrentState != GameState.OPTIONS && CurrentState != GameState.SKIN_SELECTOR)
                     {
                         SaveManager.Save(CurrentUser);
                     }
+                    break;
+                case GameState.SKIN_SELECTOR:
+                    skinSelectorScreen.Update(windowResizedThisFrame);
                     break;
                 case GameState.DISCONNECTED:
                     disconnectedScreen.Update(windowResizedThisFrame);
@@ -332,12 +362,17 @@ class Program
                     break;
                 case GameState.PLAYING:
                     PlayingState?.Draw();
-                    if (IsPaused) pauseMenu.Draw(); 
+                    if (IsPaused) pauseMenu?.Draw(); 
                     break;
                 case GameState.OPTIONS:
                     if (cameFrom == GameState.PLAYING) PlayingState?.Draw();
                     else if (cameFrom == GameState.HOME) HomeScreen.background.Draw();
                     optionsScreen.Draw();
+                    _skinBtnNav?.Draw();
+                    break;
+                case GameState.SKIN_SELECTOR:
+                    HomeScreen.background.Draw();
+                    skinSelectorScreen.Draw();
                     break;
                 case GameState.ADD_ONS:
                     addOnsScreen.Draw();
@@ -414,8 +449,7 @@ class Program
         else if (CurrentState == GameState.PLAYING && PlayingState != null)
         {
             byte biome = PlayingState.CurrentBiome;
-            isIntense = (biome == 8 || biome == 9); // Ashen Wastelands or Lava Pools
-            isSilent = PlayingState.RaidActive || PlayingState.IsBossActive();
+            isIntense = (biome == 8 || biome == 9 || PlayingState.RaidActive || PlayingState.IsBossActive());
         }
 
         // Determine which soundtrack to play if not in the end sequence
@@ -498,10 +532,12 @@ class Program
         CurrentWorldData = null; // Clear world metadata so next session is fresh
         ServerProgram.IsRunning = false;
         ShowVersionWarning = false; // Reset warning flag for next world load
+        PlayingState?.Cleanup();
         PlayingState = null;   
         IsPaused = false;
         IsEnding = false;
         Raylib.ShowCursor();
         CurrentState = targetState;
     }
+    private static UIButton? _skinBtnNav;
 }

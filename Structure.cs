@@ -21,6 +21,7 @@ public class Structure
     public float RaidBossHealth { get; set; } = 0f;
     public bool HasPlayedCountdown { get; set; } = false;
     public ServerItemStack[]? ChestInventory { get; set; } = null;
+    public float DeletionTimer { get; set; } = -1f;
     
     // Client-side visual state
     public bool HasBeenOpened { get; set; } = false;

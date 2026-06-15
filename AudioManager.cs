@@ -21,6 +21,15 @@ public static class AudioManager
         }
     }
 
+    public static void PlaySoundMulti(string key)
+    {
+        if (_sounds.TryGetValue(key, out var sound))
+        {
+            // Standard Raylib.PlaySound used as fallback if PlaySoundMulti is missing in your current version
+            Raylib.PlaySound(sound);
+        }
+    }
+
     public static void StopSound(string key)
     {
         if (_sounds.TryGetValue(key, out var sound))

@@ -34,6 +34,7 @@ public class ServerPlayer
     public Vector2 Velocity = Vector2.Zero; // For knockback
     public int SelectedSlot = 0;
 
+    public float VisualAttackTimer = 0f;
     public float AshenTime = 0f;
     public float BrimstalkerCooldown = 0f;
     public BiomeType LastKnownBiome = (BiomeType)255; // Track last biome for advancement
@@ -130,10 +131,30 @@ public class ServerPlayer
                             Position = Vector2.Zero;
                             CurrentDimension = Dimension.Overworld;
 
-                            // Clear inventory on death reset
-                            for (int i = 0; i < 25; i++) Inventory[i] = new ServerItemStack("none", 0);
-                            Inventory[0] = new ServerItemStack("iron_sword", 1); // Always give the starter sword
-                            
+                            // Keep shield, downgrade weapons, delete everything else.
+                            for (int i = 0; i < Inventory.Length; i++)
+                            {
+                                string id = Inventory[i].ItemID ?? "none";
+                                if (id == "shield") continue;
+
+                                bool isWeapon = id.EndsWith("_sword") || id.EndsWith("_axe") || id.EndsWith("_scythe") || id.EndsWith("_spear") || id.EndsWith("_kanabo");
+                                if (isWeapon)
+                                {
+                                    string? downgraded = null;
+                                    if (id.StartsWith("brimstone_")) downgraded = id.Replace("brimstone_", "diamond_");
+                                    else if (id.StartsWith("diamond_")) downgraded = id.Replace("diamond_", "iron_");
+                                    else if (id.StartsWith("iron_")) downgraded = id.Replace("iron_", "copper_");
+                                    else if (id.StartsWith("copper_")) downgraded = id.Replace("copper_", "stone_");
+                                    else if (id.StartsWith("stone_") && !id.EndsWith("_kanabo")) downgraded = id.Replace("stone_", "wooden_");
+
+                                    Inventory[i] = new ServerItemStack(downgraded ?? "none", (downgraded != null) ? Inventory[i].Count : 0);
+                                }
+                                else
+                                {
+                                    Inventory[i] = new ServerItemStack("none", 0);
+                                }
+                            }
+
                             // Clear crafting slots to prevent item duplication
                             CraftingSlot1 = new ServerItemStack("none", 0);
                             CraftingSlot2 = new ServerItemStack("none", 0);
@@ -197,7 +218,7 @@ public class ServerPlayer
                     { Console.WriteLine($"[Server] WARNING: Client {Username} sent NaN/Infinity position. Ignoring update."); }
                     Rotation = _reader.ReadSingle();
                     world.UpdatePosition(Username, Position.X, Position.Y);
-                    BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking, Health, MaxHealth, CurrentDimension);
+                    BroadcastMove(Username, x, y, Rotation, Inventory[SelectedSlot].ItemID, Inventory[24].ItemID, IsBlocking, Health, MaxHealth, CurrentDimension, VisualAttackTimer > 0);
                 }
                 else if (packetId == 2) // Slot Selection
                 {
@@ -260,6 +281,12 @@ public class ServerPlayer
                         // Send structure data for this chunk if it exists
                         if (world.Structures.TryGetValue((chunkX, chunkY), out var structure))
                         {
+                            // Generate loot instantly if it doesn't exist yet
+                            if (structure.Type == StructureType.RaidOutpost && structure.ChestInventory == null)
+                            {
+                                ServerProgram.PopulateRaidLoot(structure, new Random());
+                            }
+
                             Writer.Write((byte)12); // Packet ID 12: Structure Data
                             Writer.Write(structure.ChunkX);
                             Writer.Write(structure.ChunkY);
@@ -302,6 +329,7 @@ public class ServerPlayer
                             if (dist <= range) {
                                 _lastAttackTime = DateTime.Now; 
                                 _lastHitTime = DateTime.Now;   
+                                VisualAttackTimer = 0.3f;
                                 victim.Damage((int)dmg);
 
                                 if (Math.Abs(kb) > 0.1f) {
@@ -320,6 +348,16 @@ public class ServerPlayer
                             if (bot != null && bot.Dimension == CurrentDimension && Vector2.Distance(this.Position, bot.Position) <= range) {
                                 _lastAttackTime = DateTime.Now;
                                 _lastHitTime = DateTime.Now;
+
+                                // Proximity Aggro Trigger: Make all nearby raiders mad if one is attacked
+                                lock (world.Raiders) {
+                                    foreach (var r in world.Raiders) {
+                                        if (r.Dimension == CurrentDimension && Vector2.Distance(this.Position, r.Position) < 1000f)
+                                            r.IsHostile = true;
+                                    }
+                                }
+
+                                VisualAttackTimer = 0.3f;
                                 bot.Health -= (int)dmg;
 
                                 if (Math.Abs(kb) > 0.1f) {
@@ -346,6 +384,8 @@ public class ServerPlayer
                                     }
                                     if (bot.Name.StartsWith("Raider")) AddItemToInventory("raidshroom", Random.Shared.Next(1, 4)); // Mob drops are added to inventory
                                     if (bot.Name.StartsWith("Vortex")) AddItemToInventory("pearl", Random.Shared.Next(1, 3)); // Mob drops are added to inventory
+                                    if (bot.Name.StartsWith("Scorpion")) AddItemToInventory("raidshroom", Random.Shared.Next(1, 2));
+                                    if (bot.Name.StartsWith("Flicker")) AddItemToInventory("pearl", Random.Shared.Next(1, 2));
                                     if (bot.Name == "APEX") AddItemToInventory("brimstone_pearl", 1); // Apex drops a brimstone pearl, added to inventory
                                     if (bot.Name == "Brimstalker") AddItemToInventory("brimstone_powder", Random.Shared.Next(3, 6)); // Mob drops are added to inventory
                                 }
@@ -353,6 +393,7 @@ public class ServerPlayer
                         }
                     } else {
                         _lastAttackTime = DateTime.Now;
+                        VisualAttackTimer = 0.3f;
                     }
                 }
                 else if (packetId == 8) // Chat Message
@@ -426,7 +467,23 @@ public class ServerPlayer
                 {
                     int cx = _reader.ReadInt32();
                     int cy = _reader.ReadInt32();
-                    if (world.Structures.TryGetValue((cx, cy), out var s) && s.IsCompleted) {
+                    if (world.Structures.TryGetValue((cx, cy), out var s)) {
+                        // Trigger raid if opening an uncompleted outpost chest
+                        if (s.Type == StructureType.RaidOutpost && !s.IsCompleted && !ServerProgram.BulletboxWorld.RaidActive)
+                        {
+                            ServerProgram.StartRaidInstantly(s);
+                        }
+
+                        // Proximity Aggro Trigger: Opening a chest makes all nearby raiders mad
+                        lock (world.Raiders)
+                        {
+                            foreach (var r in world.Raiders)
+                            {
+                                if (r.Dimension == CurrentDimension && Vector2.Distance(this.Position, r.Position) < 1000f)
+                                    r.IsHostile = true;
+                            }
+                        }
+
                         CurrentOpenChest = s;
                         SendChestInventory(s.ChestInventory);
                     }
@@ -469,6 +526,14 @@ public class ServerPlayer
                             AddItemToInventory(chestItem.ItemID, actualAmount); // Use AddItemToInventory for stacking/empty slot logic
                             CurrentOpenChest.ChestInventory[chestIdx] = chestItem.Count <= actualAmount ? new ServerItemStack("none", 0) : new ServerItemStack(chestItem.ItemID, chestItem.Count - actualAmount);
                         }
+
+                        // Vanish outpost if chest is emptied
+                        bool isEmpty = true;
+                        foreach (var stack in CurrentOpenChest.ChestInventory) {
+                            if (stack.ItemID != "none" && stack.Count > 0) { isEmpty = false; break; }
+                        }
+                        if (isEmpty) ServerProgram.DeleteStructure(CurrentOpenChest);
+
                         SendFullInventory();
                         SendChestInventory(CurrentOpenChest.ChestInventory);
                     }
@@ -523,6 +588,17 @@ public class ServerPlayer
                             Inventory[slot].ItemID = "none";
                             Inventory[slot].Count = 0;
                         }
+                    }
+                }
+                else if (packetId == 27) // Dash Request
+                {
+                    float dx = _reader.ReadSingle();
+                    float dy = _reader.ReadSingle();
+                    if (Hunger >= 10)
+                    {
+                        Hunger -= 10;
+                        ApplyKnockback(new Vector2(dx, dy) * 110f);
+                        SyncHealth();
                     }
                 }
             }
@@ -790,7 +866,7 @@ public class ServerPlayer
     }
 
 
-    private void BroadcastMove(string name, float x, float y, float rot, string heldItemId, string offHandId, bool blocking, int hp, int maxHp, Dimension dimension)
+    private void BroadcastMove(string name, float x, float y, float rot, string heldItemId, string offHandId, bool blocking, int hp, int maxHp, Dimension dimension, bool attacking)
     {
         List<ServerPlayer> playersToNotify;
         lock (ServerProgram.ConnectedPlayers)
@@ -816,6 +892,8 @@ public class ServerPlayer
                     p.Writer.Write(blocking);
                     p.Writer.Write(hp);
                     p.Writer.Write(maxHp);
+                    p.Writer.Write(attacking);
+                    p.Writer.Write(true); // Players are always considered 'hostile' for texture/UI logic
                     p.Writer.Flush();
                 }
             } catch { }
@@ -851,6 +929,16 @@ public class ServerPlayer
         lock (WriterLock)
         {
             Writer.Write((byte)9); // Packet ID 9: Player Left
+            Writer.Write(username);
+            Writer.Flush();
+        }
+    }
+
+    public void SendDespawnSignal(string username)
+    {
+        lock (WriterLock)
+        {
+            Writer.Write((byte)26); // Packet ID 26: Entity Despawned
             Writer.Write(username);
             Writer.Flush();
         }
@@ -901,6 +989,7 @@ public class ServerPlayer
             Writer.Write((byte)5); // Packet ID 5: Health Sync
             Writer.Write(Health);
             Writer.Write(MaxHealth);
+            Writer.Write(Hunger);
             Writer.Flush();
         }
     }

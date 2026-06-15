@@ -603,7 +603,7 @@ public class WorldBackground
         Color outerColor = new Color((byte)255, (byte)230, (byte)120, (byte)(intensity * 180));
 
         Raylib.BeginBlendMode(BlendMode.Additive);
-        Raylib.DrawCircleGradient((int)sunOrigin.X, (int)sunOrigin.Y, sw * 2.5f, innerColor, outerColor);
+        Raylib.DrawCircleGradient(sunOrigin, sw * 2.5f, innerColor, outerColor);
         Raylib.EndBlendMode();
     }
 }

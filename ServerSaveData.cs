@@ -66,4 +66,8 @@ public class RaiderSaveData
     public SerializableVector2 ChargeDirection { get; set; }
     public bool HasDealtChargeDamage { get; set; }
     public Dimension Dimension { get; set; }
+    public int PatrolID { get; set; }
+    public bool IsHostile { get; set; }
+    public float IdleSoundTimer { get; set; }
+    public float AngrySoundTimer { get; set; }
 }

@@ -18,4 +18,6 @@ public class UserData
     public HashSet<string> KilledOverworld { get; set; } = new();
     public Dictionary<string, bool> Advancements { get; set; } = new();
     public List<string> FavoriteWorlds { get; set; } = new();
+    public string SelectedSkin { get; set; } = "Bob";
+    public List<string> UnlockedSkins { get; set; } = new();
 }

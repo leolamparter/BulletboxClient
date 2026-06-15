@@ -110,6 +110,8 @@ public class Connection
                     bool isBlocking = _reader.ReadBoolean();
                     int hp = _reader.ReadInt32();
                     int maxHp = _reader.ReadInt32();
+                    bool isAttacking = _reader.ReadBoolean();
+                    bool isHostile = _reader.ReadBoolean();
 
                     // Safety check: Don't process if the game state changed
                     var playingState = Program.PlayingState;
@@ -117,6 +119,9 @@ public class Connection
                     {
                         lock (playingState.OthersLock)
                         {
+                            // Sanity Check: Ignore insane coordinates caused by potential stream corruption
+                            if (float.IsNaN(x) || float.IsInfinity(x) || Math.Abs(x) > 1000000) return;
+
                             if (playingState.Others.TryGetValue(name, out var other))
                             {
                                 other.Position = new Vector2(x, y);
@@ -126,6 +131,8 @@ public class Connection
                                 other.IsBlocking = isBlocking;
                                 other.Health = hp;
                                 other.MaxHealth = maxHp;
+                                other.IsHostile = isHostile;
+                                if (isAttacking) other.TriggerAttack();
                             }
                             else if (Program.CurrentUser != null && name != Program.CurrentUser.Username)
                             {
@@ -138,6 +145,8 @@ public class Connection
                                 newRemotePlayer.IsBlocking = isBlocking;
                                 newRemotePlayer.Health = hp;
                                 newRemotePlayer.MaxHealth = maxHp;
+                                newRemotePlayer.IsHostile = isHostile;
+                                if (isAttacking) newRemotePlayer.TriggerAttack();
                                 playingState.Others[name] = newRemotePlayer;
                             }
                         }
@@ -157,12 +166,14 @@ public class Connection
                 {
                     int currentHealth = _reader.ReadInt32();
                     int maxHealth = _reader.ReadInt32();
+                    int currentHunger = _reader.ReadInt32();
 
                     // Store this in the PlayingState so the UI can see it
                     if (Program.PlayingState != null)
                     {
                         Program.PlayingState.CurrentHealth = currentHealth;
                         Program.PlayingState.MaxHealth = maxHealth;
+                        Program.PlayingState.CurrentHunger = currentHunger;
                     }
                 }
                 else if (packetId == 7) // Knockback Force
@@ -198,7 +209,10 @@ public class Connection
                     {
                         lock (Program.PlayingState.OthersLock)
                         {
-                            Program.PlayingState.Others.Remove(name);
+                            if (Program.PlayingState.Others.Remove(name, out var p))
+                            {
+                                lock (Program.PlayingState.UnloadQueueLock) Program.PlayingState.UnloadQueue.Add(p);
+                            }
                         }
                         Console.WriteLine($"Player {name} left the world.");
                     }
@@ -236,14 +250,21 @@ public class Connection
                     bool isCompleted = _reader.ReadBoolean();
                     lock (StructuresLock)
                     {
-                        var s = new Structure(new Vector2(posX, posY), type, chunkX, chunkY, "");
-                        s.IsCompleted = isCompleted;
-                        Structures[(chunkX, chunkY)] = s;
+                        if (type == StructureType.None)
+                        {
+                            Structures.Remove((chunkX, chunkY));
+                        }
+                        else
+                        {
+                            var s = new Structure(new Vector2(posX, posY), type, chunkX, chunkY, "");
+                            s.IsCompleted = isCompleted;
+                            Structures[(chunkX, chunkY)] = s;
+                        }
                     }
                 }
                 else if (packetId == 14) // Shield Block Sound Trigger
                 {
-                    AudioManager.PlaySound("shield_block");
+                    AudioManager.PlaySoundMulti("shield_block");
                 }
                 else if (packetId == 16) // Incoming Bomb
                 {
@@ -311,7 +332,6 @@ public class Connection
                     }
                     if (Program.PlayingState != null)
                     {
-                        lock (Program.PlayingState.OthersLock) { Program.PlayingState.Others.Clear(); }
                         Program.PlayingState.LocalPlayer.Position = new Vector2(newX, newY);
                         Program.PlayingState.RaidActive = false;
                         Program.PlayingState.TriggerCacheClear();
@@ -346,6 +366,38 @@ public class Connection
                         SaveManager.Save(Program.CurrentUser);
                     }
                 }
+                else if (packetId == 26) // Entity Despawned
+                {
+                    string name = _reader.ReadString();
+                    var playingState = Program.PlayingState;
+                    if (playingState != null)
+                    {
+                        lock (playingState.RecentlyDespawnedLock)
+                        {
+                            playingState.RecentlyDespawned.Add(name);
+                        }
+                        lock (playingState.OthersLock)
+                        {
+                            if (playingState.Others.Remove(name, out var p))
+                            {
+                                lock (playingState.UnloadQueueLock) playingState.UnloadQueue.Add(p);
+                            }
+                        }
+                        Console.WriteLine($"Entity {name} despawned.");
+                    }
+                }
+                else if (packetId == 28) // Play Sound at Position
+                {
+                    string soundKey = _reader.ReadString();
+                    float x = _reader.ReadSingle();
+                    float y = _reader.ReadSingle();
+                    if (Program.PlayingState != null)
+                    {
+                        // Play sound at a world position, client will handle volume/panning
+                        // For now, just play it globally. Advanced audio would use distance.
+                        AudioManager.PlaySoundMulti(soundKey);
+                    }
+                }
             }
         }
         catch (EndOfStreamException)
@@ -375,6 +427,18 @@ public class Connection
             _writer.Write(x);
             _writer.Write(y);
             _writer.Write(rotation);
+            _writer.Flush();
+        }
+        catch { _isConnected = false; }
+    }
+
+    public void SendDash(Vector2 direction)
+    {
+        if (!_isConnected || _writer == null) return;
+        try {
+            _writer.Write((byte)27); // Packet ID 27: Dash
+            _writer.Write(direction.X);
+            _writer.Write(direction.Y);
             _writer.Flush();
         }
         catch { _isConnected = false; }
@@ -501,6 +565,19 @@ public class Connection
         } catch { _isConnected = false; }
     }
 
+    public void SendPlaySoundAtPosition(string soundKey, Vector2 position)
+    {
+        if (!_isConnected || _writer == null) return;
+        try
+        {
+            _writer.Write((byte)28); // Packet ID 28: Play Sound at Position
+            _writer.Write(soundKey);
+            _writer.Write(position.X);
+            _writer.Write(position.Y);
+            _writer.Flush();
+        }
+        catch { _isConnected = false; }
+    }
     public bool IsConnected() => _isConnected;
 
     public void Disconnect()

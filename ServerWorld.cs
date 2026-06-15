@@ -112,7 +112,7 @@ public class RaiderBot
     public int MaxHealth = 100;
     public float Rotation;
     public float AttackTimer;
-    public string HeldItemID = "iron_sword";
+    public string HeldItemID = "wooden_sword";
     public float AttackCooldown = 0.425f;
     public float FleeTimer = 0f;
     public Vector2? WanderTarget = null;
@@ -122,7 +122,12 @@ public class RaiderBot
     public float ChargeCooldown = 15f; // Initial delay
     public Vector2 ChargeDirection = Vector2.Zero;
     public bool HasDealtChargeDamage = false;
+    public int PatrolID = -1;
+    public bool IsHostile = true;
+    public float IdleSoundTimer = 0f; // NEW
+    public float AngrySoundTimer = 0f; // NEW
     // NEW: Apex-specific fields
+    public float VisualAttackTimer = 0f;
     public bool HasTriggeredStage3Intro = false;
     public float ApexTeleportTimer = 0f;
     public Dimension Dimension = Dimension.Overworld;
@@ -366,16 +371,16 @@ public class ServerWorld
 
             _chunks[(chunkX, chunkY, dimension)] = chunk;
 
-            // Structure Generation: 0.005% chance per chunk (1 in 20,000)
+            // Structure Generation: 2.5% chance per chunk (500 in 20,000) - 10x more than intended PR5 increase
             Random rng = new Random(fHash);
-            if (rng.Next(0, 20000) < 1)
+            if (rng.Next(0, 20000) < 500)
             {
                 // Place a raid outpost at the center of the chunk
-                const int MIN_RAID_OUTPOST_DISTANCE_CHUNKS = 180;
+                const int MIN_RAID_OUTPOST_DISTANCE_CHUNKS = 100;
                 bool canPlaceOutpost = true;
 
                 // Ensure outposts don't spawn within 180 chunks of the world origin (spawn)
-                if (Math.Sqrt(chunkX * chunkX + chunkY * chunkY) < 180) canPlaceOutpost = false;
+                if (Math.Sqrt(chunkX * chunkX + chunkY * chunkY) < 100) canPlaceOutpost = false;
 
                 // Restriction: Prevent spawning in Ocean, River, Lava, or Ashen biomes
                 if (biome == BiomeType.Ocean || biome == BiomeType.River || 
@@ -408,6 +413,45 @@ public class ServerWorld
                     Structures.TryAdd((chunkX, chunkY), outpost);
                     // Clear feature if a structure exists in this chunk to ensure it generates "on top"
                     chunk.Feature = ServerFeatureType.None;
+
+                    // Spawn 1-3 normal, idle raiders nearby (similar to a patrol)
+                    Random botRand = new Random(fHash + 999);
+                    int botCount = botRand.Next(1, 4);
+
+                    // STRICT MOB CAP ENFORCEMENT:
+                    lock (Raiders)
+                    {
+                        if (Raiders.Count >= 6) botCount = 0;
+                        else botCount = Math.Min(botCount, 6 - Raiders.Count);
+                    }
+
+                    for (int i = 0; i < botCount; i++)
+                    {
+                        float angle = (float)(botRand.NextDouble() * Math.PI * 2);
+                        float dist = botRand.Next(30, 80);
+                        Vector2 spawnPos = structurePos + new Vector2(MathF.Cos(angle) * dist, MathF.Sin(angle) * dist);
+                        
+                        RaiderBot bot;
+                        int mobRoll = botRand.Next(100);
+                        if (mobRoll < 15) // 15% Scorpion
+                        {
+                            bot = new RaiderBot($"Scorpion {botRand.Next(1000, 9999)}", spawnPos) { MaxHealth = 60, Health = 60, HeldItemID = "none", AttackCooldown = 0.75f };
+                        }
+                        else if (mobRoll < 30) // 15% Flicker
+                        {
+                            bot = new RaiderBot($"Flicker {botRand.Next(1000, 9999)}", spawnPos) { MaxHealth = 50, Health = 50, HeldItemID = "none", AttackCooldown = 0.5f };
+                        }
+                        else if (mobRoll < 50) // 20% Vortex
+                        {
+                            bot = new RaiderBot($"Vortex {botRand.Next(1000, 9999)}", spawnPos) { MaxHealth = 75, Health = 75, HeldItemID = "none", AttackCooldown = 0.5f };
+                        }
+                        else // 50% Raidshroomer
+                        {
+                            bot = new RaiderBot($"Raider {botRand.Next(1000, 9999)}", spawnPos);
+                        }
+                        bot.IsHostile = false; // Neutral until attacked, as per request
+                        lock (Raiders) { Raiders.Add(bot); }
+                    }
                 }
             }
 
