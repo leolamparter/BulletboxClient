@@ -133,6 +133,8 @@ public class Connection
                                 other.MaxHealth = maxHp;
                                 other.IsHostile = isHostile;
                                 if (isAttacking) other.TriggerAttack();
+                                // If this is the APEX entity, mark presence so UI can show boss bar
+                                if (name == "APEX") playingState.ApexPresent = true;
                             }
                             else if (Program.CurrentUser != null && name != Program.CurrentUser.Username)
                             {
@@ -148,6 +150,7 @@ public class Connection
                                 newRemotePlayer.IsHostile = isHostile;
                                 if (isAttacking) newRemotePlayer.TriggerAttack();
                                 playingState.Others[name] = newRemotePlayer;
+                                if (name == "APEX") playingState.ApexPresent = true;
                             }
                         }
                     }
@@ -335,6 +338,8 @@ public class Connection
                         Program.PlayingState.LocalPlayer.Position = new Vector2(newX, newY);
                         Program.PlayingState.RaidActive = false;
                         Program.PlayingState.TriggerCacheClear();
+                        // Changing dimension should clear APEX presence on client until re-synced
+                        Program.PlayingState.ApexPresent = false;
                     }
                 }
                 else if (packetId == 25) // Advancement Trigger
@@ -383,7 +388,9 @@ public class Connection
                                 lock (playingState.UnloadQueueLock) playingState.UnloadQueue.Add(p);
                             }
                         }
-                        Console.WriteLine($"Entity {name} despawned.");
+                            // If the APEX entity despawned, clear the presence flag
+                            if (name == "APEX") playingState.ApexPresent = false;
+                            Console.WriteLine($"Entity {name} despawned.");
                     }
                 }
                 else if (packetId == 28) // Play Sound at Position

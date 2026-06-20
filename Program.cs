@@ -9,7 +9,7 @@ public enum GameState { SPLASH, HOME, LOGIN, SERVER_SELECTOR, PLAYING, OPTIONS, 
 
 class Program
 {
-    public const string VERSION = "Bulletbox 26.1 Pre-Release 5";
+    public const string VERSION = "Bulletbox 26.1 Release Candidate 1";
     public static GameState CurrentState = GameState.SPLASH;
     public static UserData CurrentUser = new UserData();
     public static string SelectedSkin 
@@ -39,7 +39,7 @@ class Program
     public static void RedeemSkin(string code)
     {
         var user = CurrentUser;
-        if (code == "ATTHSYTOG")
+        if (code == "ATTHSYTOG" || code == "BTTHSYTOG" || code == "CTTHSYTOG")
         {
             if (!user.UnlockedSkins.Contains("Apex Master"))
             {

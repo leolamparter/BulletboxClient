@@ -312,7 +312,8 @@ public class ServerProgram
                             p.AshenTime += dt;
                             TriggerAdvancement(p, "EnterAshen");
                             // Spawns after 1 minute in the biome
-                            if (p.AshenTime > 60f && p.BrimstalkerCooldown <= 0f && !BulletboxWorld.RaidActive) {
+                            // Allow Brimstalkers to spawn even during raids or existing boss fights
+                            if (p.AshenTime > 60f && p.BrimstalkerCooldown <= 0f) {
                                 // Advancement: This Seems Safe
                                     if (!p.HasIronOrDiamondWeapons())
                                     {
@@ -770,35 +771,43 @@ public class ServerProgram
                     if (bot.Name == "Brimstalker" || (bot.Name.StartsWith("Flicker") && minDist < 250f) || (bot.Name == "APEX" && apexHpPct <= 0.4f)) {
                         // Charge Attack State Machine (Shared by Brimstalker, Aggroed Flicker, and later Apex stages)
                         if (bot.ChargePhase == 0) {
-                            // Ensure the Brimstalker stays mobile and circles the player during charge cooldowns
-                            if (bot.Name == "Brimstalker") {
-                                float idealDist = 450f;
-                                float distFactor = (minDist - idealDist) * 0.5f; // Maintain engagement distance
-                                bot.Position += (dir * distFactor + sideStepDir * strafeAmount) * dt;
+                                // For most bots the charge prep may include repositioning,
+                                // but Brimstalker and APEX should not back away or circle
+                                // the player aggressively when preparing a charge.
+                                if (!(bot.Name == "Brimstalker" || bot.Name == "APEX"))
+                                {
+                                    // Non-brimstalker bots may circle/adjust distance
+                                    float idealDist = 450f;
+                                    float distFactor = (minDist - idealDist) * 0.5f; // Maintain engagement distance
+                                    bot.Position += (dir * distFactor + sideStepDir * strafeAmount) * dt;
+                                }
+                                bot.ChargeCooldown -= dt; // Cooldown for next charge
+                                if (bot.ChargeCooldown <= 0 || (bot.Name.StartsWith("Flicker") && minDist < 150f)) {
+                                    bot.ChargePhase = 1;
+                                    bot.ChargeTimer = 1.0f; // 1s Backing up phase
+                                }
                             }
-                            bot.ChargeCooldown -= dt; // Cooldown for next charge
-                            if (bot.ChargeCooldown <= 0 || (bot.Name.StartsWith("Flicker") && minDist < 150f)) {
-                                bot.ChargePhase = 1;
-                                bot.ChargeTimer = 1.0f; // 1s Backing up phase
-                            }
-                        }
-                        else if (bot.ChargePhase == 1) {
-                            // Phase 1: Back away from the player to telegraph the charge
-                            Vector2 fromPlayer = Vector2.Normalize(bot.Position - targetPos);
-                            Vector2 avoidance = GetLavaAvoidance(bot, fromPlayer);
-                            if (avoidance != Vector2.Zero) fromPlayer = Vector2.Normalize(fromPlayer + avoidance * 2.5f);
+                            else if (bot.ChargePhase == 1) {
+                                // Phase 1: Back away from the player to telegraph the charge
+                                // But do NOT perform the back-away movement for Brimstalker or APEX.
+                                if (!(bot.Name == "Brimstalker" || bot.Name == "APEX"))
+                                {
+                                    Vector2 fromPlayer = Vector2.Normalize(bot.Position - targetPos);
+                                    Vector2 avoidance = GetLavaAvoidance(bot, fromPlayer);
+                                    if (avoidance != Vector2.Zero) fromPlayer = Vector2.Normalize(fromPlayer + avoidance * 2.5f);
 
-                            bot.Position += fromPlayer * 250f * dt;
-                            bot.ChargeTimer -= dt;
-                            if (bot.ChargeTimer <= 0) {
-                                bot.ChargePhase = 2;
-                                bot.ChargeTimer = 0.7f; // Charge duration
-                                bot.ChargeDirection = Vector2.Normalize(targetPos - bot.Position);
-                                bot.HasDealtChargeDamage = false;
+                                    bot.Position += fromPlayer * 250f * dt;
+                                }
+                                bot.ChargeTimer -= dt;
+                                if (bot.ChargeTimer <= 0) {
+                                    bot.ChargePhase = 2;
+                                    bot.ChargeTimer = 0.7f; // Charge duration
+                                    bot.ChargeDirection = Vector2.Normalize(targetPos - bot.Position);
+                                    bot.HasDealtChargeDamage = false;
+                                }
+                                BroadcastBotMove(bot);
+                                continue; // Skip normal movement/bomb logic during charge prep
                             }
-                            BroadcastBotMove(bot);
-                            continue; // Skip normal movement/bomb logic during charge prep
-                        }
                         else if (bot.ChargePhase == 2) {
                             // Phase 2: High speed charge (5x normal raider speed = 1300)
                             Vector2 chargeDir = bot.ChargeDirection;

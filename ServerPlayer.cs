@@ -196,6 +196,54 @@ public class ServerPlayer
 
                         SendFullInventory();
                         SyncHealth(); // Send initial health state immediately upon login
+
+                        // Immediately send current raid state to the connecting client so
+                        // they receive boss presence/health information on join. This
+                        // ensures clients rejoining a world with APEX will show the
+                        // boss bar even before periodic broadcasts occur.
+                        lock (world.Raiders)
+                        {
+                            if (world.Raiders.Count > 0)
+                            {
+                                float currentTotalHp = 0f;
+                                float totalMaxHp = 0f;
+                                foreach (var r in world.Raiders) { currentTotalHp += r.Health; totalMaxHp += r.MaxHealth; }
+                                float val = (totalMaxHp > 0f) ? (currentTotalHp / totalMaxHp) : 0f;
+                                bool hasOutpost = world.ActiveRaidOutpostPosition.HasValue;
+
+                                Writer.Write((byte)11);
+                                Writer.Write((byte)1);
+                                Writer.Write(val);
+                                Writer.Write(hasOutpost);
+                                if (hasOutpost) { Writer.Write(world.ActiveRaidOutpostPosition!.Value.X); Writer.Write(world.ActiveRaidOutpostPosition!.Value.Y); }
+                                Writer.Flush();
+                            }
+                        }
+
+                        // Also send current raider entities (spawn) for this player's dimension
+                        lock (world.Raiders)
+                        {
+                            foreach (var bot in world.Raiders)
+                            {
+                                if (bot.Dimension != CurrentDimension) continue;
+                                lock (WriterLock)
+                                {
+                                    Writer.Write((byte)1); // Bot move/spawn packet (same shape as player move)
+                                    Writer.Write(bot.Name);
+                                    Writer.Write(bot.Position.X);
+                                    Writer.Write(bot.Position.Y);
+                                    Writer.Write(bot.Rotation);
+                                    Writer.Write(bot.HeldItemID ?? "none");
+                                    Writer.Write("none"); // offhand
+                                    Writer.Write(false); // isBlocking
+                                    Writer.Write(bot.Health);
+                                    Writer.Write(bot.MaxHealth);
+                                    Writer.Write(bot.VisualAttackTimer > 0);
+                                    Writer.Write(bot.IsHostile);
+                                    Writer.Flush();
+                                }
+                            }
+                        }
                     }
                     Console.WriteLine($"[Handshake] {Username} is in.");
                 }

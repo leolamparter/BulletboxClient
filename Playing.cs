@@ -209,6 +209,8 @@ public class Playing
     public bool RaidActive = false;
     public float RaidBossHealth = 0f;
     public float RaidTimer = 9999f;
+    // Flag set when the client receives a spawn/update for the APEX entity
+    public bool ApexPresent = false;
     private bool _hasPlayedCountdown = false;
     private bool _hasPlayedHorn = false;
     private Vector2? _fixedRaidOutpostPosition = null; // NEW FIELD
@@ -680,6 +682,7 @@ public class Playing
         
         Raylib.UnloadRenderTexture(_sceneTarget);
         Raylib.UnloadRenderTexture(_lightingTarget);
+        ApexPresent = false;
     }
 
     private bool IsAdvancementAlreadyCompleted(string key)
@@ -737,6 +740,7 @@ public class Playing
         _lastPlayerChunkX = int.MaxValue;
         _lastPlayerChunkY = int.MaxValue;
         Cam.RaylibCamera.Target = new Vector2(32, 32); // Snap camera to player center
+        ApexPresent = false;
     }
 
     public void Update(float dt, bool windowResized)
@@ -2246,7 +2250,11 @@ public class Playing
         bool isApexActive = playersToDraw.Any(o => o.Name == "APEX");
         bool isBrimstalkerActive = playersToDraw.Any(o => o.Name == "Brimstalker");
 
-        if (RaidActive && (isApexActive || isBrimstalkerActive))
+        // Show the boss bar when a boss is present or the server-reported
+        // `RaidBossHealth` indicates an active boss. This covers reconnect
+        // cases where the raid flag may be reset by other packets but the
+        // server still provides a boss health value.
+        if (RaidBossHealth > 0f || ApexPresent || (RaidActive && (isApexActive || isBrimstalkerActive)))
         {
             int sw = Raylib.GetScreenWidth();
             int barW = 400, barH = 24;
@@ -2256,7 +2264,22 @@ public class Playing
             Raylib.DrawRectangleRounded(new Rectangle(x - 4, y - 4, barW + 8, barH + 8), 0.5f, 4, new Color(255, 80, 0, 40));
             Raylib.DrawRectangleRounded(new Rectangle(x, y, barW, barH), 0.5f, 4, new Color(20, 20, 20, 200));
 
-            float fillWidth = barW * RaidBossHealth;
+            // Determine boss health percentage. Prefer authoritative entity data
+            // when the APEX entity is present client-side; otherwise fall back
+            // to the server-reported `RaidBossHealth` value.
+            float bossPct = RaidBossHealth;
+            if (ApexPresent)
+            {
+                lock (OthersLock)
+                {
+                    if (Others.TryGetValue("APEX", out var apex))
+                    {
+                        if (apex.MaxHealth > 0) bossPct = Math.Clamp(apex.Health / (float)apex.MaxHealth, 0f, 1f);
+                    }
+                }
+            }
+
+            float fillWidth = barW * Math.Clamp(bossPct, 0f, 1f);
             if (fillWidth > 2)
                 Raylib.DrawRectangleRounded(new Rectangle(x, y, fillWidth, barH), 0.5f, 4, new Color(255, 80, 0, 255));
                 
